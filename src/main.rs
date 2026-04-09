@@ -10,10 +10,7 @@ fn main() -> io::Result<()> {
     match listener.accept() {
         Ok((mut stream, _)) => {
             loop {
-                let Ok(_) = stream.read(&mut [0; 128]) else {
-                    break;
-                };
-                
+                stream.read(&mut [0; 128])?;
                 stream.write_all(b"+PONG\r\n")?;
             }
         },
