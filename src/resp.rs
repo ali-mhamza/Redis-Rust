@@ -14,7 +14,7 @@ pub mod parse {
         pos
     }
 
-    pub fn parse_resp_string(input: &str) -> (String, usize) {
+    fn parse_resp_string(input: &str) -> (String, usize) {
         // Skip the $ sign.
         let part = &input[1..];
         let mut pos = parse_length(part);
@@ -50,7 +50,7 @@ pub mod parse {
 pub mod build {
     const CRLF_BYTES: &[u8] = b"\r\n";
 
-    pub fn resp_encode_str(string: &str) -> Vec<u8> {
+    pub fn resp_bulk_str(string: &str) -> Vec<u8> {
         let mut vec = Vec::new();
         let size = string.len().to_string();
         let size = size.as_bytes();
@@ -63,12 +63,21 @@ pub mod build {
 
         vec
     }
+
+    pub fn resp_simple_str(string: &str) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(b'+');
+        vec.extend(string.as_bytes());
+        vec.extend(CRLF_BYTES);
+
+        vec
+    }
 }
 
 #[cfg(test)]
 mod test {
     use std::str;
-    use crate::resp::parse::{parse_resp_array, parse_resp_string};
+    use crate::resp::parse::parse_resp_array;
 
     #[test]
     fn test_parse_array() {
@@ -76,13 +85,5 @@ mod test {
             .unwrap();
         let vec = parse_resp_array(input);
         assert_eq!(vec, vec!["ECHO", "hey"]);
-    }
-
-    #[test]
-    fn test_parse_string() {
-        let input = str::from_utf8(b"$4\r\nPING\r\n")
-            .unwrap();
-        let string = parse_resp_string(input).0;
-        assert_eq!(string, String::from("PING"));
     }
 }
