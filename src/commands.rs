@@ -25,14 +25,14 @@ pub type Table = HashMap<String, ValueEntry>;
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 
 fn handle_get(
-    commands: &Vec<String>,
+    arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
     let mut guard = store.lock().unwrap();
 
-    match (&mut guard).get(&commands[1]) {
+    match (&mut guard).get(&arguments[1]) {
         Some(entry) => {
             if let Value::STRING(value) = &entry.value {
                 let now = Instant::now();
@@ -40,7 +40,7 @@ fn handle_get(
                 if let Time::FIX(duration, instant) = entry.time
                     && now.duration_since(instant) > duration {
                     response = Vec::from(NULL_BULK_STR);
-                    guard.remove(&commands[1]);
+                    guard.remove(&arguments[1]);
                 } else {
                     response = resp::build::resp_bulk_str(value);
                 }
@@ -67,18 +67,18 @@ fn normalize_range_index(index: &mut i64, length: usize) {
 }
 
 fn handle_lrange(
-    commands: &Vec<String>,
+    arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     let mut slices: Vec<&str> = Vec::new();
     let guard = store.lock().unwrap();
 
-    match guard.get(&commands[1]) {
+    match guard.get(&arguments[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &entry.value {
-                let mut start: i64 = (&commands[2]).parse().unwrap();
-                let mut end: i64 = (&commands[3]).parse().unwrap();
+                let mut start: i64 = (&arguments[2]).parse().unwrap();
+                let mut end: i64 = (&arguments[3]).parse().unwrap();
 
                 [&mut start, &mut end].iter_mut()
                     .for_each(|i| normalize_range_index(*i, list.len()));
@@ -117,16 +117,16 @@ fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
 }
 
 fn handle_list_push(
-    commands: &Vec<String>,
+    arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>,
     reverse: bool
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
     let mut guard = store.lock().unwrap();
-    let mut entries = prepare_entries(&commands[2..], reverse);
+    let mut entries = prepare_entries(&arguments[2..], reverse);
 
-    match (&mut guard).get_mut(&commands[1]) {
+    match (&mut guard).get_mut(&arguments[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
                 if reverse {
@@ -139,7 +139,7 @@ fn handle_list_push(
         },
         None => {
             let length = entries.len();
-            guard.insert(commands[1].clone(), ValueEntry {
+            guard.insert(arguments[1].clone(), ValueEntry {
                 value: Value::LIST(entries),
                 time: Time::VAR
             });
@@ -152,17 +152,39 @@ fn handle_list_push(
     Ok(())
 }
 
+fn handle_llen(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<Table>>
+) -> io::Result<()> {
+    let mut response: Vec<u8> = Vec::new();
+
+    match store.lock().unwrap().get(&arguments[1]) {
+        Some(entry) => {
+            if let Value::LIST(list) = &entry.value {
+                response = resp::build::resp_integer(list.len() as i64);
+            }
+        },
+        None => {
+            response = resp::build::resp_integer(0);
+        }
+    }
+
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 fn handle_set(
-    commands: &Vec<String>,
+    arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     let response: Vec<u8>;
 
-    if commands.len() == 5 {
+    if arguments.len() == 5 {
         // Only handling PX for now.
-        let time: u64 = commands[4].parse().unwrap();
-        let option = commands[3].to_uppercase();
+        let time: u64 = arguments[4].parse().unwrap();
+        let option = arguments[3].to_uppercase();
         // Dummy value.
         let duration;
 
@@ -172,13 +194,13 @@ fn handle_set(
             duration = Duration::from_millis(time);
         }
 
-        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: Value::STRING(commands[2].clone()),
+        store.lock().unwrap().insert(arguments[1].clone(), ValueEntry {
+            value: Value::STRING(arguments[2].clone()),
             time: Time::FIX(duration, Instant::now())
         });
     } else {
-        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: Value::STRING(commands[2].clone()),
+        store.lock().unwrap().insert(arguments[1].clone(), ValueEntry {
+            value: Value::STRING(arguments[2].clone()),
             time: Time::VAR
         });
     }
@@ -201,25 +223,16 @@ pub fn handle_commands(
             response = resp::build::resp_bulk_str(&commands[1]);
             stream.write_all(&response)?;
         },
-        "GET" => {
-            handle_get(commands, stream, store)?;
-        },
-        "LPUSH" => {
-            handle_list_push(commands, stream, store, true)?;
-        }
-        "LRANGE" => {
-            handle_lrange(commands, stream, store)?;
-        }
+        "GET" => handle_get(commands, stream, store)?,
+        "LLEN" => handle_llen(commands, stream, store)?,
+        "LPUSH" => handle_list_push(commands, stream, store, true)?,
+        "LRANGE" => handle_lrange(commands, stream, store)?,
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;
         },
-        "RPUSH" => {
-            handle_list_push(commands, stream, store, false)?;
-        },
-        "SET" => {
-            handle_set(commands, stream, store)?;
-        },
+        "RPUSH" => handle_list_push(commands, stream, store, false)?,
+        "SET" => handle_set(commands, stream, store)?,
         _ => {
             return Ok(());
         }
