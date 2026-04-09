@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
 use crate::resp;
-use crate::resp::build::{resp_array, resp_integer};
 
 enum Value {
     STRING(String),
@@ -89,7 +88,7 @@ fn handle_lrange(
         }
     }
 
-    let response = resp_array(&slices);
+    let response = resp::build::resp_array(&slices);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -106,7 +105,7 @@ fn handle_rpush(
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
                 list.append(&mut Vec::from(&commands[2..]));
-                response = resp_integer(list.len() as i64);
+                response = resp::build::resp_integer(list.len() as i64);
             }
         },
         None => {
@@ -117,7 +116,7 @@ fn handle_rpush(
                 time: Time::VAR
             });
 
-            response = resp_integer(length as i64);
+            response = resp::build::resp_integer(length as i64);
         }
     }
 
