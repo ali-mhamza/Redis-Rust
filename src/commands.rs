@@ -95,6 +95,7 @@ fn handle_rpush(
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
                 list.push(commands[2].clone());
+                dbg!(list.len());
                 response = resp_integer(list.len() as i64);
             }
         },
