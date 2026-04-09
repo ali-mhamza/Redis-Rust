@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+use std::io;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 
 fn main() -> io::Result<()> {
@@ -6,11 +7,18 @@ fn main() -> io::Result<()> {
 
     let listener = TcpListener::bind("127.0.0.1:6379")?;
 
-    loop {
-        if let Ok((mut stream, _)) = listener.accept() {
-            stream.write_all(b"+PONG\r\n")?;
-        } else {
-            break;
+    match listener.accept() {
+        Ok((mut stream, _)) => {
+            loop {
+                let Ok(_) = stream.read(&mut [0; 128]) else {
+                    break;
+                };
+                
+                stream.write_all(b"+PONG\r\n")?;
+            }
+        },
+        Err(e) => {
+            eprintln!("Error: {e}");
         }
     }
 
