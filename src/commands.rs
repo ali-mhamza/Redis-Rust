@@ -67,8 +67,20 @@ fn handle_lrange(
     match guard.get(&commands[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &entry.value {
-                let start: usize = (&commands[2]).parse().unwrap();
-                let mut end: usize = (&commands[3]).parse().unwrap();
+                let mut start: i64 = (&commands[2]).parse().unwrap();
+                let mut end: i64 = (&commands[3]).parse().unwrap();
+
+                for x in [&mut start, &mut end] {
+                    if *x < 0 {
+                        *x += list.len() as i64;
+
+                        if *x < 0 {
+                            *x = 0;
+                        }
+                    }
+                }
+
+                let (start, mut end): (usize, usize) = (start as usize, end as usize);
 
                 if start >= list.len() || start > end {
                     slices = vec![];
