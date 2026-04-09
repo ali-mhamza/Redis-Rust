@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
 use crate::resp;
+use crate::resp::build::resp_bulk_str;
 
 enum Value {
     STRING(String),
@@ -174,6 +175,33 @@ fn handle_llen(
     Ok(())
 }
 
+fn handle_lpop(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<Table>>
+) -> io::Result<()> {
+    let mut response: Vec<u8> = Vec::new();
+
+    match store.lock().unwrap().get_mut(&arguments[1]) {
+        Some(entry) => {
+            if let Value::LIST(list) = &mut entry.value {
+                if list.len() == 0 {
+                    response = Vec::from(NULL_BULK_STR);
+                } else {
+                    let popped = list.remove(0);
+                    response = resp_bulk_str(&popped);
+                }
+            }
+        },
+        None => {
+            response = Vec::from(NULL_BULK_STR);
+        }
+    }
+
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 fn handle_set(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -225,6 +253,7 @@ pub fn handle_commands(
         },
         "GET" => handle_get(commands, stream, store)?,
         "LLEN" => handle_llen(commands, stream, store)?,
+        "LPOP" => handle_lpop(commands, stream, store)?,
         "LPUSH" => handle_list_push(commands, stream, store, true)?,
         "LRANGE" => handle_lrange(commands, stream, store)?,
         "PING" => {
