@@ -1,10 +1,10 @@
+use crate::resp;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
-use crate::resp;
 
 enum Value {
     STRING(String),
