@@ -1,6 +1,8 @@
+pub mod commands;
 pub mod connect;
 pub mod resp;
 
+pub use commands::Table;
 use std::io;
 use std::net::{TcpListener};
 
