@@ -135,9 +135,19 @@ fn handle_set(
     if commands.len() == 5 {
         // Only handling PX for now.
         let time: u64 = commands[4].parse().unwrap();
+        let option = commands[3].to_uppercase();
+        // Dummy value.
+        let duration;
+
+        if option == "EX" {
+            duration = Duration::from_secs(time);
+        } else { // PX
+            duration = Duration::from_millis(time);
+        }
+
         store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
             value: Value::STRING(commands[2].clone()),
-            time: Time::FIX(Duration::from_millis(time), Instant::now())
+            time: Time::FIX(duration, Instant::now())
         });
     } else {
         store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
