@@ -56,6 +56,16 @@ fn handle_get(
     Ok(())
 }
 
+fn normalize_range_index(index: &mut i64, length: usize) {
+    if *index < 0 {
+        *index += length as i64;
+
+        if *index < 0 {
+            *index = 0;
+        }
+    }
+}
+
 fn handle_lrange(
     commands: &Vec<String>,
     stream: &mut TcpStream,
@@ -70,16 +80,8 @@ fn handle_lrange(
                 let mut start: i64 = (&commands[2]).parse().unwrap();
                 let mut end: i64 = (&commands[3]).parse().unwrap();
 
-                for x in [&mut start, &mut end] {
-                    if *x < 0 {
-                        *x += list.len() as i64;
-
-                        if *x < 0 {
-                            *x = 0;
-                        }
-                    }
-                }
-
+                [&mut start, &mut end].iter_mut()
+                    .for_each(|i| normalize_range_index(*i, list.len()));
                 let (start, mut end): (usize, usize) = (start as usize, end as usize);
 
                 if start >= list.len() || start > end {
