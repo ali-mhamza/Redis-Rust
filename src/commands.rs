@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
 use crate::resp;
-use crate::resp::build::resp_bulk_str;
 
 enum Value {
     STRING(String),
@@ -181,15 +180,29 @@ fn handle_lpop(
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
+    let mut start: usize = 1;
+
+    if arguments.len() > 2 {
+        start = (&arguments[2]).parse().unwrap();
+    }
+    if start > arguments.len() {
+        start = arguments.len();
+    }
 
     match store.lock().unwrap().get_mut(&arguments[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
                 if list.len() == 0 {
                     response = Vec::from(NULL_BULK_STR);
-                } else {
+                } else if start == 1 {
                     let popped = list.remove(0);
-                    response = resp_bulk_str(&popped);
+                    response = resp::build::resp_bulk_str(&popped);
+                } else {
+                    let popped: Vec<&str> = (&list[..start]).iter().map(
+                        |s: &String| &s[..]
+                    ).collect();
+                    response = resp::build::resp_array(&popped);
+                    *list = Vec::from(&list[start..]);
                 }
             }
         },
