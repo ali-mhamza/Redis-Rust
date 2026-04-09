@@ -107,26 +107,40 @@ fn handle_lrange(
     Ok(())
 }
 
-fn handle_rpush(
+fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
+    let mut list = Vec::from(entries);
+    if reverse {
+        list.reverse();
+    }
+
+    list
+}
+
+fn handle_list_push(
     commands: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<Table>>,
+    reverse: bool
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
     let mut guard = store.lock().unwrap();
+    let mut entries = prepare_entries(&commands[2..], reverse);
 
     match (&mut guard).get_mut(&commands[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
-                list.append(&mut Vec::from(&commands[2..]));
+                if reverse {
+                    list.splice(0..0, entries);
+                } else {
+                    list.append(&mut entries);
+                }
                 response = resp::build::resp_integer(list.len() as i64);
             }
         },
         None => {
-            let list = Vec::from(&commands[2..]);
-            let length = list.len();
+            let length = entries.len();
             guard.insert(commands[1].clone(), ValueEntry {
-                value: Value::LIST(list),
+                value: Value::LIST(entries),
                 time: Time::VAR
             });
 
@@ -190,6 +204,9 @@ pub fn handle_commands(
         "GET" => {
             handle_get(commands, stream, store)?;
         },
+        "LPUSH" => {
+            handle_list_push(commands, stream, store, true)?;
+        }
         "LRANGE" => {
             handle_lrange(commands, stream, store)?;
         }
@@ -198,7 +215,7 @@ pub fn handle_commands(
             stream.write_all(&response)?;
         },
         "RPUSH" => {
-            handle_rpush(commands, stream, store)?;
+            handle_list_push(commands, stream, store, false)?;
         },
         "SET" => {
             handle_set(commands, stream, store)?;
