@@ -78,6 +78,7 @@ pub mod build {
 mod test {
     use std::str;
     use crate::resp::parse::parse_resp_array;
+    use crate::resp::build::{resp_bulk_str, resp_simple_str};
 
     #[test]
     fn test_parse_array() {
@@ -85,5 +86,23 @@ mod test {
             .unwrap();
         let vec = parse_resp_array(input);
         assert_eq!(vec, vec!["ECHO", "hey"]);
+
+        let input = str::from_utf8(
+            b"*5\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n$2\r\nEX\r\n$4\r\n1000\r\n"
+        ).unwrap();
+        let vec = parse_resp_array(input);
+        assert_eq!(vec, vec!["SET", "key", "value", "EX", "1000"]);
+    }
+
+    #[test]
+    fn test_bulk_str() {
+        let bulk_str = resp_bulk_str("hey");
+        assert_eq!(bulk_str, Vec::from(b"$3\r\nhey\r\n"));
+    }
+
+    #[test]
+    fn test_simple_str() {
+        let simple_str = resp_simple_str("OK");
+        assert_eq!(simple_str, Vec::from(b"+OK\r\n"));
     }
 }
