@@ -94,17 +94,19 @@ fn handle_rpush(
     match (&mut guard).get_mut(&commands[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
-                list.push(commands[2].clone());
+                list.append(&mut Vec::from(&commands[2..]));
                 response = resp_integer(list.len() as i64);
             }
         },
         None => {
+            let list = Vec::from(&commands[2..]);
+            let length = list.len();
             guard.insert(commands[1].clone(), ValueEntry {
-                value: Value::LIST(vec![commands[2].clone()]),
+                value: Value::LIST(list),
                 time: Time::VAR
             });
 
-            response = resp_integer(1);
+            response = resp_integer(length as i64);
         }
     }
 
