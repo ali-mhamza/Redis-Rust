@@ -100,7 +100,7 @@ fn handle_rpush(
         },
         None => {
             guard.insert(commands[1].clone(), ValueEntry {
-                value: Value::LIST(vec![commands[1].clone()]),
+                value: Value::LIST(vec![commands[2].clone()]),
                 time: Time::VAR
             });
 
