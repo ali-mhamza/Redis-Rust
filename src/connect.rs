@@ -1,4 +1,4 @@
-use crate::parse;
+use crate::resp;
 
 use std::{io, thread};
 use std::io::{Read, Write};
@@ -11,7 +11,8 @@ fn handle_command(commands: &Vec<String>, stream: &mut TcpStream) -> io::Result<
     let cmd = commands[0].to_uppercase();
     match &cmd[..] {
         "ECHO" => {
-            stream.write_all(commands[1].as_bytes())?;
+            let response = resp::build::resp_encode_str(&commands[1]);
+            stream.write_all(&response)?;
         },
         "PING" => {
             stream.write_all(b"+PONG\r\n")?;
@@ -30,7 +31,7 @@ fn respond_to_connection(mut stream: TcpStream) -> io::Result<()> {
         stream.read(&mut buf)?;
         let string = str::from_utf8(&buf).unwrap();
         
-        let commands = parse::parse_resp_array(string);
+        let commands = resp::parse::parse_resp_array(string);
         handle_command(&commands, &mut stream)?;
     }
 }

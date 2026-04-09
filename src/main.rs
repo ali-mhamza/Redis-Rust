@@ -1,5 +1,5 @@
 pub mod connect;
-pub mod parse;
+pub mod resp;
 
 use std::io;
 use std::net::{TcpListener};
