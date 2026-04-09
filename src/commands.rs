@@ -5,6 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
 use crate::resp;
+use crate::resp::build::resp_integer;
+
+enum Value {
+    STRING(String),
+    LIST(Vec<String>),
+}
 
 enum Time {
     VAR,
@@ -12,7 +18,7 @@ enum Time {
 }
 
 pub struct ValueEntry {
-    value: String,
+    value: Value,
     time: Time
 }
 
@@ -24,22 +30,21 @@ fn handle_get(
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
-    let response: Vec<u8>;
-    let mut remove = false;
+    let mut response: Vec<u8> = Vec::new();
     let mut guard = store.lock().unwrap();
 
-    match guard.get(&commands[1]) {
+    match (&mut guard).get(&commands[1]) {
         Some(entry) => {
-            if let Time::FIX(duration, instant) = entry.time {
+            if let Value::STRING(value) = &entry.value {
                 let now = Instant::now();
-                if now.duration_since(instant) > duration {
+
+                if let Time::FIX(duration, instant) = entry.time
+                    && now.duration_since(instant) > duration {
                     response = Vec::from(NULL_BULK_STR);
-                    remove = true;
+                    guard.remove(&commands[1]);
                 } else {
-                    response = resp::build::resp_bulk_str(&entry.value);
+                    response = resp::build::resp_bulk_str(value);
                 }
-            } else {
-                response = resp::build::resp_bulk_str(&entry.value);
             }
         },
         None => {
@@ -47,9 +52,6 @@ fn handle_get(
         },
     }
 
-    if remove {
-        guard.remove(&commands[1]);
-    }
     stream.write_all(&response)?;
 
     Ok(())
@@ -66,17 +68,46 @@ fn handle_set(
         // Only handling PX for now.
         let time: u64 = commands[4].parse().unwrap();
         store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: commands[2].clone(),
+            value: Value::STRING(commands[2].clone()),
             time: Time::FIX(Duration::from_millis(time), Instant::now())
         });
     } else {
         store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: commands[2].clone(),
+            value: Value::STRING(commands[2].clone()),
             time: Time::VAR
         });
     }
 
     response = resp::build::resp_simple_str("OK");
+    stream.write_all(&response)?;
+    Ok(())
+}
+
+fn handle_rpush(
+    commands: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<Table>>
+) -> io::Result<()> {
+    let mut response: Vec<u8> = Vec::new();
+    let mut guard = store.lock().unwrap();
+
+    match (&mut guard).get_mut(&commands[1]) {
+        Some(entry) => {
+            if let Value::LIST(list) = &mut entry.value {
+                list.push(commands[2].clone());
+                response = resp_integer(list.len() as i64);
+            }
+        },
+        None => {
+            guard.insert(commands[1].clone(), ValueEntry {
+                value: Value::LIST(vec![]),
+                time: Time::VAR
+            });
+
+            response = resp_integer(1);
+        }
+    }
+
     stream.write_all(&response)?;
     Ok(())
 }
@@ -97,12 +128,15 @@ pub fn handle_commands(
         "GET" => {
             handle_get(commands, stream, store)?;
         },
-        "SET" => {
-            handle_set(commands, stream, store)?;
-        },
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;
+        },
+        "RPUSH" => {
+            handle_rpush(commands, stream, store)?;
+        },
+        "SET" => {
+            handle_set(commands, stream, store)?;
         },
         _ => {
             return Ok(());

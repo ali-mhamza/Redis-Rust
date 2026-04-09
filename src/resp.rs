@@ -1,7 +1,7 @@
 pub mod parse {
     const SKIP_CRLF: usize = b"\r\n".len();
 
-    fn parse_length(part: &str) -> usize {
+    fn parse_digits(part: &str) -> usize {
         let mut pos: usize = 0;
         for byte in part.as_bytes() {
             if byte.is_ascii_digit() {
@@ -17,7 +17,7 @@ pub mod parse {
     fn parse_resp_string(input: &str) -> (String, usize) {
         // Skip the $ sign.
         let part = &input[1..];
-        let mut pos = parse_length(part);
+        let mut pos = parse_digits(part);
 
         let size: usize = part[..pos].parse().unwrap();
         // Skip the \r\n.
@@ -27,11 +27,21 @@ pub mod parse {
         let string = String::from(text);
         (string, pos + size + SKIP_CRLF)
     }
+    
+    pub fn parse_resp_integer(input: &str) -> i64 {
+        const SKIP_PREFIX: usize = b":_".len();
+
+        // Skip the ':' and +/-.
+        let size = parse_digits(&input[2..]);
+        let integer: i64 = input[1..size + SKIP_PREFIX].parse().unwrap();
+
+        integer
+    }
 
     pub fn parse_resp_array(input: &str) -> Vec<String> {
         // Skip the * sign.
         let part = &input[1..];
-        let mut pos = parse_length(part);
+        let mut pos = parse_digits(part);
         let count: usize = part[..pos].parse().unwrap();
 
         let mut strings = Vec::with_capacity(count);
@@ -72,13 +82,26 @@ pub mod build {
 
         vec
     }
+
+    pub fn resp_integer(value: i64) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(b':');
+        if value > 0 {
+            vec.push(b'+');
+        }
+        let int_str = value.to_string();
+        vec.extend(int_str.as_bytes());
+        vec.extend(CRLF_BYTES);
+
+        vec
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::resp::parse::*;
+    use crate::resp::build::*;
     use std::str;
-    use crate::resp::parse::parse_resp_array;
-    use crate::resp::build::{resp_bulk_str, resp_simple_str};
 
     #[test]
     fn test_parse_array() {
@@ -95,6 +118,13 @@ mod test {
     }
 
     #[test]
+    fn test_parse_integer() {
+        let input = resp_integer(10);
+        let result = parse_resp_integer(str::from_utf8(&input).unwrap());
+        assert_eq!(result, 10);
+    }
+
+    #[test]
     fn test_bulk_str() {
         let bulk_str = resp_bulk_str("hey");
         assert_eq!(bulk_str, Vec::from(b"$3\r\nhey\r\n"));
@@ -104,5 +134,14 @@ mod test {
     fn test_simple_str() {
         let simple_str = resp_simple_str("OK");
         assert_eq!(simple_str, Vec::from(b"+OK\r\n"));
+    }
+
+    #[test]
+    fn test_integer() {
+        let integer = resp_integer(10);
+        assert_eq!(integer, Vec::from(b":+10\r\n"));
+
+        let integer = resp_integer(-10);
+        assert_eq!(integer, Vec::from(b":-10\r\n"));
     }
 }
