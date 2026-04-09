@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, Instant};
 use crate::resp;
-use crate::resp::build::resp_integer;
+use crate::resp::build::{resp_array, resp_integer};
 
 enum Value {
     STRING(String),
@@ -57,28 +57,32 @@ fn handle_get(
     Ok(())
 }
 
-fn handle_set(
+fn handle_lrange(
     commands: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
-    let response: Vec<u8>;
+    let mut response = Vec::new();
+    let guard = store.lock().unwrap();
 
-    if commands.len() == 5 {
-        // Only handling PX for now.
-        let time: u64 = commands[4].parse().unwrap();
-        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: Value::STRING(commands[2].clone()),
-            time: Time::FIX(Duration::from_millis(time), Instant::now())
-        });
-    } else {
-        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
-            value: Value::STRING(commands[2].clone()),
-            time: Time::VAR
-        });
+    match guard.get(&commands[1]) {
+        Some(entry) => {
+            if let Value::LIST(list) = &entry.value {
+                let start: usize = (&commands[2]).parse().unwrap();
+                let end: usize = (&commands[3]).parse().unwrap();
+
+                let slices: Vec<&str> = (&list[start..=end]).iter().map(
+                    |s: &String| &s[..]
+                ).collect();
+
+                response = resp_array(&slices);
+            }
+        },
+        None => {
+            response = resp_array(&[]);
+        }
     }
 
-    response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
     Ok(())
 }
@@ -114,6 +118,32 @@ fn handle_rpush(
     Ok(())
 }
 
+fn handle_set(
+    commands: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<Table>>
+) -> io::Result<()> {
+    let response: Vec<u8>;
+
+    if commands.len() == 5 {
+        // Only handling PX for now.
+        let time: u64 = commands[4].parse().unwrap();
+        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
+            value: Value::STRING(commands[2].clone()),
+            time: Time::FIX(Duration::from_millis(time), Instant::now())
+        });
+    } else {
+        store.lock().unwrap().insert(commands[1].clone(), ValueEntry {
+            value: Value::STRING(commands[2].clone()),
+            time: Time::VAR
+        });
+    }
+
+    response = resp::build::resp_simple_str("OK");
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 pub fn handle_commands(
     commands: &Vec<String>,
     stream: &mut TcpStream,
@@ -130,6 +160,9 @@ pub fn handle_commands(
         "GET" => {
             handle_get(commands, stream, store)?;
         },
+        "LRANGE" => {
+            handle_lrange(commands, stream, store)?;
+        }
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;

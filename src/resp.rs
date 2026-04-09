@@ -95,6 +95,20 @@ pub mod build {
 
         vec
     }
+
+    pub fn resp_array(array: &[&str]) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(b'*');
+        let size_str = array.len().to_string();
+        vec.extend(size_str.as_bytes());
+        vec.extend(CRLF_BYTES);
+
+        for string in array {
+            vec.extend(resp_bulk_str(string));
+        }
+
+        vec
+    }
 }
 
 #[cfg(test)]
@@ -143,5 +157,18 @@ mod test {
 
         let integer = resp_integer(-10);
         assert_eq!(integer, Vec::from(b":-10\r\n"));
+    }
+
+    #[test]
+    fn test_array() {
+        let array = ["a", "b", "c"];
+        let result = resp_array(&array);
+
+        assert_eq!(result, Vec::from(b"*3\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n"));
+
+        let array: [&str; 0] = [];
+        let result = resp_array(&array);
+
+        assert_eq!(result, Vec::from(b"*0\r\n"));
     }
 }
