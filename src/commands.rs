@@ -62,27 +62,34 @@ fn handle_lrange(
     stream: &mut TcpStream,
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
-    let mut response = Vec::new();
+    let mut slices: Vec<&str> = Vec::new();
     let guard = store.lock().unwrap();
 
     match guard.get(&commands[1]) {
         Some(entry) => {
             if let Value::LIST(list) = &entry.value {
                 let start: usize = (&commands[2]).parse().unwrap();
-                let end: usize = (&commands[3]).parse().unwrap();
+                let mut end: usize = (&commands[3]).parse().unwrap();
 
-                let slices: Vec<&str> = (&list[start..=end]).iter().map(
-                    |s: &String| &s[..]
-                ).collect();
+                if start >= list.len() || start > end {
+                    slices = vec![];
+                } else {
+                    if end >= list.len() {
+                        end = list.len() - 1;
+                    }
 
-                response = resp_array(&slices);
+                    slices = (&list[start..=end]).iter().map(
+                        |s: &String| &s[..]
+                    ).collect();
+                }
             }
         },
         None => {
-            response = resp_array(&[]);
+            slices = vec![];
         }
     }
 
+    let response = resp_array(&slices);
     stream.write_all(&response)?;
     Ok(())
 }
