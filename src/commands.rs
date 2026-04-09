@@ -95,15 +95,12 @@ fn handle_rpush(
         Some(entry) => {
             if let Value::LIST(list) = &mut entry.value {
                 list.push(commands[2].clone());
-                dbg!(&commands[1]);
-                dbg!(list.len());
                 response = resp_integer(list.len() as i64);
             }
         },
         None => {
-            dbg!(&commands[1]);
             guard.insert(commands[1].clone(), ValueEntry {
-                value: Value::LIST(vec![]),
+                value: Value::LIST(vec![commands[1].clone()]),
                 time: Time::VAR
             });
 
