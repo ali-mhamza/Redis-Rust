@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
     }
     
     for handle in handles {
-        handle.join().unwrap();
+        let _ = handle.join().unwrap();
     }
 
     Ok(())
