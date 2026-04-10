@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 enum Value {
     STRING(String),
     LIST(Vec<String>),
+    STREAM(HashMap<String, String>),
 }
 
 enum Time {
@@ -306,7 +307,9 @@ fn handle_set(
 ) -> io::Result<()> {
     let response: Vec<u8>;
 
-    if arguments.len() == 5 {
+    if arguments.len() == 5
+        && (arguments.contains(&String::from("PX"))
+        || arguments.contains(&String::from("EX"))) {
         // Only handling PX for now.
         let time: u64 = arguments[4].parse().unwrap();
         let option = arguments[3].to_uppercase();
@@ -347,12 +350,34 @@ fn handle_type(
             match entry.value {
                 Value::STRING(_) => response = "string",
                 Value::LIST(_) =>   response = "list",
+                Value::STREAM(_) => response = "stream",
             }
         },
         None => response = "none",
     }
 
     let response = resp::build::resp_simple_str(response);
+    stream.write_all(&response)?;
+    Ok(())
+}
+
+fn handle_xadd(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    let id = &arguments[2];
+    let mut map = HashMap::new();
+
+    for pair in (&arguments[3..]).chunks(2) {
+        map.insert(pair[0].clone(), pair[1].clone());
+    }
+
+    store.lock().unwrap().insert(id.clone(), ValueEntry {
+        value: Value::STREAM(map),
+        time: Time::VAR
+    });
+    let response = resp::build::resp_simple_str(id);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -383,6 +408,7 @@ pub fn handle_commands(
         "RPUSH" =>  handle_list_push(commands, stream, store, false)?,
         "SET" =>    handle_set(commands, stream, store)?,
         "TYPE" =>   handle_type(commands, stream, store)?,
+        "XADD" =>   handle_xadd(commands, stream, store)?,
         _ => {
             return Ok(());
         }
