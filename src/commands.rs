@@ -43,7 +43,6 @@ fn handle_blpop(
 ) -> io::Result<()> {
     let mut response = Vec::from(NULL_BULK_ARRAY);
     let name = &arguments[1];
-    // Getting but ignoring timeout for now.
     let timeout = arguments
         .get(2)
         .and_then(|s| s.parse::<f32>().ok())
@@ -62,6 +61,7 @@ fn handle_blpop(
 
     let (lock, cvar) = &*cond;
     let mut started = lock.lock().unwrap();
+    *started = false;
     if timeout.is_zero() {
         while !*started {
             started = cvar.wait(started).unwrap();
