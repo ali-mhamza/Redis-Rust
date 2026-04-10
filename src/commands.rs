@@ -377,7 +377,7 @@ fn handle_xadd(
         value: Value::STREAM(map),
         time: Time::VAR
     });
-    let response = resp::build::resp_simple_str(id);
+    let response = resp::build::resp_bulk_str(id);
     stream.write_all(&response)?;
     Ok(())
 }
