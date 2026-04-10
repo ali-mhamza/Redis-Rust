@@ -1,8 +1,9 @@
 use crate::resp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,53 @@ pub struct ValueEntry {
 
 pub type Table = HashMap<String, ValueEntry>;
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
+
+static BLOCK_SET: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
+
+fn handle_blpop(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<Table>>
+) -> io::Result<()> {
+    const BLOCK_SLEEP_TIME: Duration = Duration::from_millis(500);
+
+    let name = &arguments[1];
+    // Getting but ignoring timeout for now.
+    let _timeout: i64 = if arguments.len() > 2 {
+        (&arguments[2]).parse().unwrap()
+    } else { 0 };
+
+    let block = Arc::clone(BLOCK_SET.get().unwrap());
+    let mut guard = block.lock().unwrap();
+    let None = guard.get(name) else {
+        return Ok(())
+    };
+
+    // Add so other clients can't block on it.
+    (&mut guard).insert(name.clone());
+
+    loop {
+        match store.lock().unwrap().get(name) {
+            Some(entry) => {
+                if let Value::LIST(list) = &entry.value
+                    && list.len() != 0 {
+                    let response = resp::build::resp_array(
+                        &[&name[..], &list[0][..]]
+                    );
+                    stream.write_all(&response)?;
+                    break;
+                }
+            },
+            None => {}
+        }
+
+        thread::sleep(BLOCK_SLEEP_TIME);
+    }
+
+    // Remove so new clients can (now) block on it.
+    (&mut guard).remove(name);
+    Ok(())
+}
 
 fn handle_get(
     arguments: &Vec<String>,
