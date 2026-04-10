@@ -61,7 +61,6 @@ fn handle_blpop(
 
     let (lock, cvar) = &*cond;
     let mut started = lock.lock().unwrap();
-    *started = false;
     if timeout.is_zero() {
         while !*started {
             started = cvar.wait(started).unwrap();
@@ -214,7 +213,6 @@ fn handle_list_push(
                     list.append(&mut entries);
                 }
                 response = resp::build::resp_integer(list.len() as i64);
-                check_blocks(&arguments[1]);
             }
         },
         None => {
@@ -228,6 +226,7 @@ fn handle_list_push(
         }
     }
 
+    check_blocks(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
