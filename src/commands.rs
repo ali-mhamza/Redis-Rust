@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 enum Value {
     STRING(String),
     LIST(Vec<String>),
-    STREAM(HashMap<String, String>),
+    STREAM(String, HashMap<String, String>),
 }
 
 enum Time {
@@ -350,7 +350,7 @@ fn handle_type(
             match entry.value {
                 Value::STRING(_) => response = "string",
                 Value::LIST(_) =>   response = "list",
-                Value::STREAM(_) => response = "stream",
+                Value::STREAM(_, _) => response = "stream",
             }
         },
         None => response = "none",
@@ -366,6 +366,7 @@ fn handle_xadd(
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
+    let key = arguments[1].clone();
     let id = &arguments[2];
     let mut map = HashMap::new();
 
@@ -373,8 +374,8 @@ fn handle_xadd(
         map.insert(pair[0].clone(), pair[1].clone());
     }
 
-    store.lock().unwrap().insert(id.clone(), ValueEntry {
-        value: Value::STREAM(map),
+    store.lock().unwrap().insert(key, ValueEntry {
+        value: Value::STREAM(id.clone(), map),
         time: Time::VAR
     });
     let response = resp::build::resp_bulk_str(id);
