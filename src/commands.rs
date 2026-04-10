@@ -263,10 +263,10 @@ fn handle_lpop(
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
-    let mut start: usize = 1;
+    let mut count: usize = 1;
 
     if arguments.len() > 2 {
-        start = (&arguments[2]).parse().unwrap();
+        count = (&arguments[2]).parse().unwrap();
     }
 
     match store.lock().unwrap().get_mut(&arguments[1]) {
@@ -274,19 +274,19 @@ fn handle_lpop(
             if let Value::LIST(list) = &mut entry.value {
                 if list.len() == 0 {
                     response = Vec::from(NULL_BULK_STR);
-                } else if start == 1 {
+                } else if count == 1 {
                     let popped = list.remove(0);
                     response = resp::build::resp_bulk_str(&popped);
                 } else {
-                    if start > list.len() {
-                        start = list.len();
+                    if count > list.len() {
+                        count = list.len();
                     }
 
-                    let popped: Vec<&str> = (&list[..start]).iter().map(
+                    let popped: Vec<&str> = (&list[..count]).iter().map(
                         |s: &String| &s[..]
                     ).collect();
                     response = resp::build::resp_array(&popped);
-                    *list = Vec::from(&list[start..]);
+                    *list = Vec::from(&list[count..]);
                 }
             }
         },
