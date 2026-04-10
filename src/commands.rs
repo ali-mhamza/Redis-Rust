@@ -58,7 +58,7 @@ fn handle_blpop(
     (&mut guard).insert(name.clone());
 
     loop {
-        if timeout.as_secs() != 0
+        if timeout.as_millis() != 0
             && Instant::now().duration_since(start) > timeout {
             break;
         }
