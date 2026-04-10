@@ -308,6 +308,7 @@ pub fn handle_commands(
     let response: Vec<u8>;
 
     match &cmd[..] {
+        "BLPOP" =>  handle_blpop(commands, stream, store)?,
         "ECHO" => {
             response = resp::build::resp_bulk_str(&commands[1]);
             stream.write_all(&response)?;
