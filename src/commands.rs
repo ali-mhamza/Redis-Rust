@@ -22,7 +22,9 @@ pub struct ValueEntry {
 }
 
 pub type Table = HashMap<String, ValueEntry>;
+
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
+const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
 
 static BLOCK_SET: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 
@@ -40,7 +42,7 @@ fn handle_blpop(
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     const BLOCK_SLEEP_TIME: Duration = Duration::from_millis(500);
-    let mut response = Vec::from(NULL_BULK_STR);
+    let mut response = Vec::from(NULL_BULK_ARRAY);
     let start = Instant::now();
 
     let name = &arguments[1];
