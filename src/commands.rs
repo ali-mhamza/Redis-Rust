@@ -40,31 +40,36 @@ fn handle_blpop(
     store: &Arc<Mutex<Table>>
 ) -> io::Result<()> {
     const BLOCK_SLEEP_TIME: Duration = Duration::from_millis(500);
+    let mut response = Vec::from(NULL_BULK_STR);
+    let start = Instant::now();
 
     let name = &arguments[1];
     // Getting but ignoring timeout for now.
-    let _timeout: i64 = if arguments.len() > 2 {
+    let timeout: u64 = if arguments.len() > 2 {
         (&arguments[2]).parse().unwrap()
     } else { 0 };
+    let timeout = Duration::from_secs(timeout);
 
     let block = get_block_set();
     let mut guard = block.lock().unwrap();
-    let None = guard.get(name) else {
-        return Ok(())
-    };
+    let None = guard.get(name) else { return Ok(()) };
 
     // Add so other clients can't block on it.
     (&mut guard).insert(name.clone());
 
     loop {
+        if timeout.as_secs() != 0
+            && Instant::now().duration_since(start) > timeout {
+            break;
+        }
+
         match store.lock().unwrap().get_mut(name) {
             Some(entry) => {
                 if let Value::LIST(list) = &mut entry.value
                     && list.len() != 0 {
-                    let response = resp::build::resp_array(
+                    response = resp::build::resp_array(
                         &[&name[..], &list.remove(0)]
                     );
-                    stream.write_all(&response)?;
                     break;
                 }
             },
@@ -76,6 +81,7 @@ fn handle_blpop(
 
     // Remove so new clients can (now) block on it.
     (&mut guard).remove(name);
+    stream.write_all(&response)?;
     Ok(())
 }
 
