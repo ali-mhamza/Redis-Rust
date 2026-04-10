@@ -264,17 +264,17 @@ pub fn handle_commands(
             response = resp::build::resp_bulk_str(&commands[1]);
             stream.write_all(&response)?;
         },
-        "GET" => handle_get(commands, stream, store)?,
-        "LLEN" => handle_llen(commands, stream, store)?,
-        "LPOP" => handle_lpop(commands, stream, store)?,
-        "LPUSH" => handle_list_push(commands, stream, store, true)?,
+        "GET" =>    handle_get(commands, stream, store)?,
+        "LLEN" =>   handle_llen(commands, stream, store)?,
+        "LPOP" =>   handle_lpop(commands, stream, store)?,
+        "LPUSH" =>  handle_list_push(commands, stream, store, true)?,
         "LRANGE" => handle_lrange(commands, stream, store)?,
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;
         },
-        "RPUSH" => handle_list_push(commands, stream, store, false)?,
-        "SET" => handle_set(commands, stream, store)?,
+        "RPUSH" =>  handle_list_push(commands, stream, store, false)?,
+        "SET" =>    handle_set(commands, stream, store)?,
         _ => {
             return Ok(());
         }
