@@ -113,8 +113,8 @@ pub mod build {
 
 #[cfg(test)]
 mod test {
-    use crate::resp::parse::*;
     use crate::resp::build::*;
+    use crate::resp::parse::*;
     use std::str;
 
     #[test]
