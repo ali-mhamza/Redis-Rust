@@ -60,7 +60,7 @@ fn handle_blpop(
     // Add so other clients can't block on it.
     (&mut table).insert(name.clone(), Arc::clone(&cond));
 
-    let (lock, cvar) = (&*cond);
+    let (lock, cvar) = &*cond;
     let mut started = lock.lock().unwrap();
     if timeout.is_zero() {
         while !*started {
