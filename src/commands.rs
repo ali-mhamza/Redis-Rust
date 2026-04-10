@@ -373,9 +373,31 @@ fn parse_stream_id(id: &str) -> (i64, i64) {
     (first, second)
 }
 
-fn validate_stream_id(previous: &(i64, i64), id: &str) -> bool {
-    let new = parse_stream_id(id);
-    new.0 > previous.0 || (new.0 == previous.0 && new.1 > previous.1)
+fn validate_stream_id(
+    response: &mut Vec<u8>,
+    previous: &(i64, i64),
+    new: &(i64, i64)
+) -> bool {
+    const ZERO_ERR_MSG: &str =
+        "The ID specified in XADD must be greater than 0-0";
+    const SMALL_ERR_MSG: &str = "The ID specified in XADD is equal or \
+        smaller than the target stream top item";
+
+    if new.0 <= previous.0
+        && (new.0 != previous.0 || new.1 <= previous.1) {
+        *response = resp::build::resp_error(
+            ErrorType::ERR,
+            if new.0 == 0 && new.1 == 0 {
+                ZERO_ERR_MSG
+            } else {
+                SMALL_ERR_MSG
+            }
+        );
+
+        return false;
+    }
+
+    true
 }
 
 fn handle_xadd(
@@ -393,33 +415,23 @@ fn handle_xadd(
     }
 
     let mut guard = store.lock().unwrap();
+    let id_pair = parse_stream_id(id);
     match guard.get_mut(&key) {
         Some(entry) => {
             if let Value::STREAM(previous, entries) = &mut entry.value {
-                if !validate_stream_id(previous, id) {
-                    response = resp::build::resp_error(
-                        ErrorType::ERR,
-                        "The ID specified in XADD is equal or \
-                        smaller than the target stream top item"
-                    );
-                } else {
+                if validate_stream_id(&mut response, previous, &id_pair) {
                     entries.insert(id.clone(), map);
-                    *previous = parse_stream_id(id);
+                    *previous = id_pair;
                 }
             }
         },
         None => {
-            if !validate_stream_id(&(0, 0), id) {
-                response = resp::build::resp_error(
-                    ErrorType::ERR,
-                    "The ID specified in XADD must be greater than 0-0"
-                );
-            } else {
+            if validate_stream_id(&mut response, &(0, 0), &id_pair) {
                 let id_map = HashMap::from([
                     (id.clone(), map)
                 ]);
                 guard.insert(key, ValueEntry {
-                    value: Value::STREAM(parse_stream_id(id), id_map),
+                    value: Value::STREAM(id_pair, id_map),
                     time: Time::VAR
                 });
             }
