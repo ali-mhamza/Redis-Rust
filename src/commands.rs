@@ -57,12 +57,12 @@ fn handle_blpop(
     (&mut guard).insert(name.clone());
 
     loop {
-        match store.lock().unwrap().get(name) {
+        match store.lock().unwrap().get_mut(name) {
             Some(entry) => {
-                if let Value::LIST(list) = &entry.value
+                if let Value::LIST(list) = &mut entry.value
                     && list.len() != 0 {
                     let response = resp::build::resp_array(
-                        &[&name[..], &list[0][..]]
+                        &[&name[..], &list.remove(0)]
                     );
                     stream.write_all(&response)?;
                     break;
