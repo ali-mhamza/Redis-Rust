@@ -58,6 +58,9 @@ fn handle_blpop(
     let cond = Arc::new((Mutex::new(false), Condvar::new()));
     // Add so other clients can't block on it.
     (&mut table).insert(name.clone(), Arc::clone(&cond));
+    // Unblock table while waiting so other threads can
+    // update it.
+    drop(table);
 
     let (lock, cvar) = &*cond;
     let mut started = lock.lock().unwrap();
@@ -70,10 +73,10 @@ fn handle_blpop(
             let (s, time_result) = cvar
                 .wait_timeout(started, timeout)
                 .unwrap();
+            started = s;
             if time_result.timed_out() {
                 break;
             }
-            started = s;
         }
     }
 
@@ -85,6 +88,7 @@ fn handle_blpop(
     }
 
     // Remove so new clients can (now) block on it.
+    table = block.lock().unwrap();
     (&mut table).remove(name);
     stream.write_all(&response)?;
     Ok(())
