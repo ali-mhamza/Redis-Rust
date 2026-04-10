@@ -60,6 +60,8 @@ pub mod parse {
 pub mod build {
     const CRLF_BYTES: &[u8] = b"\r\n";
 
+    pub enum ErrorType { ERR, WRONGTYPE, }
+
     pub fn resp_bulk_str(string: &str) -> Vec<u8> {
         let mut vec = Vec::new();
         let size = string.len().to_string();
@@ -106,6 +108,18 @@ pub mod build {
         for string in array {
             vec.extend(resp_bulk_str(string));
         }
+
+        vec
+    }
+
+    pub fn resp_error(error: ErrorType, msg: &str) -> Vec<u8> {
+        let mut vec = match error {
+            ErrorType::ERR => Vec::from("-ERR "),
+            ErrorType::WRONGTYPE => Vec::from("-WRONGTYPE "),
+        };
+
+        vec.extend(msg.as_bytes());
+        vec.extend(CRLF_BYTES);
 
         vec
     }
@@ -170,5 +184,14 @@ mod test {
         let result = resp_array(&array);
 
         assert_eq!(result, Vec::from(b"*0\r\n"));
+    }
+
+    #[test]
+    fn test_error() {
+        let error = "The ID specified in XADD must be greater than 0-0";
+        let result = resp_error(ErrorType::ERR, error);
+
+        assert_eq!(result, b"-ERR The ID specified in \
+            XADD must be greater than 0-0\r\n");
     }
 }

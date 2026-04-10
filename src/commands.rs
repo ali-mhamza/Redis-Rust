@@ -4,11 +4,15 @@ use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use crate::resp::build::ErrorType;
+
+type StreamID = String;
+type Stream = HashMap<StreamID, HashMap<String, String>>;
 
 enum Value {
     STRING(String),
     LIST(Vec<String>),
-    STREAM(String, HashMap<String, String>),
+    STREAM((i64, i64), Stream), // (i64, i64): Last ID.
 }
 
 enum Time {
@@ -22,11 +26,11 @@ pub struct ValueEntry {
 }
 
 pub type DataTable = HashMap<String, ValueEntry>;
-type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
 
+type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 
 fn get_block_set() -> Arc<Mutex<BlockTable>> {
@@ -361,6 +365,19 @@ fn handle_type(
     Ok(())
 }
 
+fn parse_stream_id(id: &str) -> (i64, i64) {
+    let pos = id.find('-').unwrap();
+    let first: i64 = id[..pos].parse().unwrap();
+    let second: i64 = id[pos + 1..].parse().unwrap();
+
+    (first, second)
+}
+
+fn validate_stream_id(previous: &(i64, i64), id: &str) -> bool {
+    let new = parse_stream_id(id);
+    new.0 > previous.0 || (new.0 == previous.0 && new.1 > previous.1)
+}
+
 fn handle_xadd(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -369,16 +386,46 @@ fn handle_xadd(
     let key = arguments[1].clone();
     let id = &arguments[2];
     let mut map = HashMap::new();
+    let mut response = resp::build::resp_bulk_str(id);
 
     for pair in (&arguments[3..]).chunks(2) {
         map.insert(pair[0].clone(), pair[1].clone());
     }
 
-    store.lock().unwrap().insert(key, ValueEntry {
-        value: Value::STREAM(id.clone(), map),
-        time: Time::VAR
-    });
-    let response = resp::build::resp_bulk_str(id);
+    let mut guard = store.lock().unwrap();
+    match guard.get_mut(&key) {
+        Some(entry) => {
+            if let Value::STREAM(previous, entries) = &mut entry.value {
+                if !validate_stream_id(previous, id) {
+                    response = resp::build::resp_error(
+                        ErrorType::ERR,
+                        "The ID specified in XADD is equal or \
+                        smaller than the target stream top item"
+                    );
+                } else {
+                    entries.insert(id.clone(), map);
+                    *previous = parse_stream_id(id);
+                }
+            }
+        },
+        None => {
+            if !validate_stream_id(&(0, 0), id) {
+                response = resp::build::resp_error(
+                    ErrorType::ERR,
+                    "The ID specified in XADD must be greater than 0-0"
+                );
+            } else {
+                let id_map = HashMap::from([
+                    (id.clone(), map)
+                ]);
+                guard.insert(key, ValueEntry {
+                    value: Value::STREAM(parse_stream_id(id), id_map),
+                    time: Time::VAR
+                });
+            }
+        }
+    }
+
     stream.write_all(&response)?;
     Ok(())
 }
