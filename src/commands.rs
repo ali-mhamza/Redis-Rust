@@ -26,6 +26,14 @@ const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 
 static BLOCK_SET: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
 
+fn get_block_set() -> Arc<Mutex<HashSet<String>>> {
+    let set = BLOCK_SET.get_or_init(|| {
+        Arc::new(Mutex::new(HashSet::new()))
+    });
+
+    Arc::clone(set)
+}
+
 fn handle_blpop(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -39,7 +47,7 @@ fn handle_blpop(
         (&arguments[2]).parse().unwrap()
     } else { 0 };
 
-    let block = Arc::clone(BLOCK_SET.get().unwrap());
+    let block = get_block_set();
     let mut guard = block.lock().unwrap();
     let None = guard.get(name) else {
         return Ok(())
