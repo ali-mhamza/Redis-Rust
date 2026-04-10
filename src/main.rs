@@ -2,7 +2,7 @@ pub mod commands;
 pub mod connect;
 pub mod resp;
 
-pub use commands::Table;
+pub use commands::DataTable;
 use std::io;
 use std::net::{TcpListener};
 

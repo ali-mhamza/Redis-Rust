@@ -1,9 +1,8 @@
 use crate::resp;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 enum Value {
@@ -21,16 +20,17 @@ pub struct ValueEntry {
     time: Time
 }
 
-pub type Table = HashMap<String, ValueEntry>;
+pub type DataTable = HashMap<String, ValueEntry>;
+type BlockTable = HashMap<String, Arc<Mutex<Condvar>>>;
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
 
-static BLOCK_SET: OnceLock<Arc<Mutex<HashSet<String>>>> = OnceLock::new();
+static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 
-fn get_block_set() -> Arc<Mutex<HashSet<String>>> {
+fn get_block_set() -> Arc<Mutex<BlockTable>> {
     let set = BLOCK_SET.get_or_init(|| {
-        Arc::new(Mutex::new(HashSet::new()))
+        Arc::new(Mutex::new(BlockTable::new()))
     });
 
     Arc::clone(set)
@@ -39,50 +39,50 @@ fn get_block_set() -> Arc<Mutex<HashSet<String>>> {
 fn handle_blpop(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    const BLOCK_SLEEP_TIME: Duration = Duration::from_millis(500);
     let mut response = Vec::from(NULL_BULK_ARRAY);
-    let start = Instant::now();
-
     let name = &arguments[1];
     // Getting but ignoring timeout for now.
-    let timeout: f32 = if arguments.len() > 2 {
-        (&arguments[2]).parse().unwrap()
-    } else { 0.0 };
-    let timeout = Duration::from_millis((timeout * 1000.0) as u64);
+    let timeout = arguments
+        .get(2)
+        .and_then(|s| s.parse::<f32>().ok())
+        .map(|secs| Duration::from_millis((secs * 1000.0) as u64))
+        .unwrap_or(Duration::ZERO);
 
     let block = get_block_set();
-    let mut guard = block.lock().unwrap();
-    let None = guard.get(name) else { return Ok(()) };
+    let mut table = block.lock().unwrap();
+    if table.get(name).is_some() {
+        return Ok(())
+    }
 
+    let cond = Arc::new(Mutex::new(Condvar::new()));
     // Add so other clients can't block on it.
-    (&mut guard).insert(name.clone());
+    (&mut table).insert(name.clone(), Arc::clone(&cond));
 
-    loop {
-        if timeout.as_millis() != 0
-            && Instant::now().duration_since(start) > timeout {
-            break;
+    let mutex = Mutex::new(false);
+    let mut started = mutex.lock().unwrap();
+    let cvar = cond.lock().unwrap();
+    if timeout.is_zero() {
+        while !*started {
+            started = cvar.wait(started).unwrap();
         }
-
-        match store.lock().unwrap().get_mut(name) {
-            Some(entry) => {
-                if let Value::LIST(list) = &mut entry.value
-                    && list.len() != 0 {
-                    response = resp::build::resp_array(
-                        &[&name[..], &list.remove(0)]
-                    );
-                    break;
-                }
-            },
-            None => {}
+    } else {
+        while !*started {
+            let (s, _) = cvar.wait_timeout(started, timeout).unwrap();
+            started = s;
         }
+    }
 
-        thread::sleep(BLOCK_SLEEP_TIME);
+    if let Some(entry) = store.lock().unwrap().get_mut(name) {
+        if let Value::LIST(list) = &mut entry.value {
+            let entries = [&name[..], &list.remove(0)];
+            response = resp::build::resp_array(&entries);
+        }
     }
 
     // Remove so new clients can (now) block on it.
-    (&mut guard).remove(name);
+    (&mut table).remove(name);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -90,7 +90,7 @@ fn handle_blpop(
 fn handle_get(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
     let mut guard = store.lock().unwrap();
@@ -132,7 +132,7 @@ fn normalize_range_index(index: &mut i64, length: usize) {
 fn handle_lrange(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut slices: Vec<&str> = Vec::new();
     let guard = store.lock().unwrap();
@@ -179,10 +179,20 @@ fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
     list
 }
 
+fn check_blocks(target: &str) {
+    let block = get_block_set();
+    match block.lock().unwrap().get(target) {
+        Some(var) => {
+            var.lock().unwrap().notify_one();
+        },
+        None => {}
+    }
+}
+
 fn handle_list_push(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>,
+    store: &Arc<Mutex<DataTable>>,
     reverse: bool
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
@@ -198,6 +208,7 @@ fn handle_list_push(
                     list.append(&mut entries);
                 }
                 response = resp::build::resp_integer(list.len() as i64);
+                check_blocks(&arguments[1]);
             }
         },
         None => {
@@ -218,7 +229,7 @@ fn handle_list_push(
 fn handle_llen(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
 
@@ -240,7 +251,7 @@ fn handle_llen(
 fn handle_lpop(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut response: Vec<u8> = Vec::new();
     let mut start: usize = 1;
@@ -281,7 +292,7 @@ fn handle_lpop(
 fn handle_set(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let response: Vec<u8>;
 
@@ -317,7 +328,7 @@ fn handle_set(
 pub fn handle_commands(
     commands: &Vec<String>,
     stream: &mut TcpStream,
-    store: &Arc<Mutex<Table>>
+    store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let cmd = commands[0].to_uppercase();
     let response: Vec<u8>;

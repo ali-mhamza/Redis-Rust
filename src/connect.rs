@@ -1,6 +1,6 @@
 use crate::commands;
 use crate::resp;
-use crate::Table;
+use crate::DataTable;
 
 use std::{io, thread};
 use std::io::Read;
@@ -12,7 +12,7 @@ const BUFFER_SIZE: usize = 1024;
 
 fn respond_to_connection(
     mut stream: TcpStream,
-    store: Arc<Mutex<Table>>
+    store: Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     loop {
         let mut buf = [0; BUFFER_SIZE];
@@ -26,7 +26,7 @@ fn respond_to_connection(
 
 pub fn handle_connections(listener: &TcpListener) -> io::Result<()> {
     let mut handles = Vec::new();
-    let store = Arc::new(Mutex::new(Table::new()));
+    let store = Arc::new(Mutex::new(DataTable::new()));
 
     for stream in listener.incoming() {
         match stream {
