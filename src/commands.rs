@@ -268,9 +268,6 @@ fn handle_lpop(
     if arguments.len() > 2 {
         start = (&arguments[2]).parse().unwrap();
     }
-    if start > arguments.len() {
-        start = arguments.len();
-    }
 
     match store.lock().unwrap().get_mut(&arguments[1]) {
         Some(entry) => {
@@ -281,6 +278,10 @@ fn handle_lpop(
                     let popped = list.remove(0);
                     response = resp::build::resp_bulk_str(&popped);
                 } else {
+                    if start > list.len() {
+                        start = list.len();
+                    }
+
                     let popped: Vec<&str> = (&list[..start]).iter().map(
                         |s: &String| &s[..]
                     ).collect();
