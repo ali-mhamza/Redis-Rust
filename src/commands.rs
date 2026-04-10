@@ -4,7 +4,6 @@ use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time;
 use std::time::{Duration, Instant};
 
 enum Value {
@@ -14,7 +13,7 @@ enum Value {
 
 enum Time {
     VAR,
-    FIX(time::Duration, time::Instant),
+    FIX(Duration, Instant),
 }
 
 pub struct ValueEntry {
