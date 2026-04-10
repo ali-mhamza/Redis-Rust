@@ -335,6 +335,28 @@ fn handle_set(
     Ok(())
 }
 
+fn handle_type(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    let response: &str;
+
+    match store.lock().unwrap().get(&arguments[1]) {
+        Some(entry) => {
+            match entry.value {
+                Value::STRING(_) => response = "string",
+                Value::LIST(_) =>   response = "list",
+            }
+        },
+        None => response = "none",
+    }
+
+    let response = resp::build::resp_simple_str(response);
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 pub fn handle_commands(
     commands: &Vec<String>,
     stream: &mut TcpStream,
@@ -360,6 +382,7 @@ pub fn handle_commands(
         },
         "RPUSH" =>  handle_list_push(commands, stream, store, false)?,
         "SET" =>    handle_set(commands, stream, store)?,
+        "TYPE" =>   handle_type(commands, stream, store)?,
         _ => {
             return Ok(());
         }
