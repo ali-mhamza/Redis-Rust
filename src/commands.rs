@@ -21,7 +21,7 @@ pub struct ValueEntry {
 }
 
 pub type DataTable = HashMap<String, ValueEntry>;
-type BlockTable = HashMap<String, Arc<Mutex<Condvar>>>;
+type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
@@ -56,20 +56,24 @@ fn handle_blpop(
         return Ok(())
     }
 
-    let cond = Arc::new(Mutex::new(Condvar::new()));
+    let cond = Arc::new((Mutex::new(false), Condvar::new()));
     // Add so other clients can't block on it.
     (&mut table).insert(name.clone(), Arc::clone(&cond));
 
-    let mutex = Mutex::new(false);
-    let mut started = mutex.lock().unwrap();
-    let cvar = cond.lock().unwrap();
+    let (lock, cvar) = (&*cond);
+    let mut started = lock.lock().unwrap();
     if timeout.is_zero() {
         while !*started {
             started = cvar.wait(started).unwrap();
         }
     } else {
         while !*started {
-            let (s, _) = cvar.wait_timeout(started, timeout).unwrap();
+            let (s, time_result) = cvar
+                .wait_timeout(started, timeout)
+                .unwrap();
+            if time_result.timed_out() {
+                break;
+            }
             started = s;
         }
     }
@@ -181,9 +185,11 @@ fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
 
 fn check_blocks(target: &str) {
     let block = get_block_set();
-    match block.lock().unwrap().get(target) {
+    match block.lock().unwrap().get_mut(target) {
         Some(var) => {
-            var.lock().unwrap().notify_one();
+            let mut mutex = (&var.0).lock().unwrap();
+            *mutex = true;
+            var.1.notify_one();
         },
         None => {}
     }
