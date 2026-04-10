@@ -45,10 +45,10 @@ fn handle_blpop(
 
     let name = &arguments[1];
     // Getting but ignoring timeout for now.
-    let timeout: u64 = if arguments.len() > 2 {
+    let timeout: f32 = if arguments.len() > 2 {
         (&arguments[2]).parse().unwrap()
-    } else { 0 };
-    let timeout = Duration::from_secs(timeout);
+    } else { 0.0 };
+    let timeout = Duration::from_millis((timeout * 1000.0) as u64);
 
     let block = get_block_set();
     let mut guard = block.lock().unwrap();
