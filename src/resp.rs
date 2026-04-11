@@ -58,18 +58,31 @@ pub mod parse {
 }
 
 pub mod build {
+    use crate::{Stream, StreamID};
+
     const CRLF_BYTES: &[u8] = b"\r\n";
 
+    enum SizeType { STRING, ARRAY }
     pub enum ErrorType { ERR, WRONGTYPE, }
+
+    fn resp_size(size: usize, size_type: SizeType) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.push(match size_type {
+            SizeType::STRING => b'$',
+            SizeType::ARRAY =>  b'*'
+        });
+
+        let size_str = size.to_string();
+        vec.extend(size_str.as_bytes());
+        vec.extend(CRLF_BYTES);
+
+        vec
+    }
 
     pub fn resp_bulk_str(string: &str) -> Vec<u8> {
         let mut vec = Vec::new();
-        let size = string.len().to_string();
-        let size = size.as_bytes();
 
-        vec.push(b'$');
-        vec.extend(size);
-        vec.extend(CRLF_BYTES);
+        vec.extend(resp_size(string.len(), SizeType::STRING));
         vec.extend(string.as_bytes());
         vec.extend(CRLF_BYTES);
 
@@ -100,10 +113,7 @@ pub mod build {
 
     pub fn resp_array(array: &[&str]) -> Vec<u8> {
         let mut vec = Vec::new();
-        vec.push(b'*');
-        let size_str = array.len().to_string();
-        vec.extend(size_str.as_bytes());
-        vec.extend(CRLF_BYTES);
+        vec.extend(resp_size(array.len(), SizeType::ARRAY));
 
         for string in array {
             vec.extend(resp_bulk_str(string));
@@ -123,12 +133,46 @@ pub mod build {
 
         vec
     }
+
+    fn resp_stream_id(id: &StreamID) -> String {
+        let mut id_str = String::new();
+
+        let first_str = id.0.to_string();
+        id_str.push_str(&first_str);
+        id_str.push('-');
+        let second_str = id.1.to_string();
+        id_str.push_str(&second_str);
+
+        id_str
+    }
+
+    pub fn resp_stream_array(stream: &Stream) -> Vec<u8> {
+        let mut vec= Vec::new();
+        const STREAM_PAIR_SIZE: &[u8] = b"*2\r\n";
+
+        vec.extend(resp_size(stream.len(), SizeType::ARRAY));
+
+        for pair in stream {
+            vec.extend(STREAM_PAIR_SIZE);
+            let id_str = resp_stream_id(&pair.0);
+            vec.extend(resp_bulk_str(&id_str));
+
+            vec.extend(resp_size(pair.1.len(), SizeType::ARRAY));
+
+            for entry in &pair.1 {
+                vec.extend(resp_bulk_str(entry));
+            }
+        }
+
+        vec
+    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::resp::build::*;
     use crate::resp::parse::*;
+    use crate::Stream;
     use std::str;
 
     #[test]
@@ -193,5 +237,42 @@ mod test {
 
         assert_eq!(result, b"-ERR The ID specified in \
             XADD must be greater than 0-0\r\n");
+    }
+
+    #[test]
+    fn test_stream_array() {
+        let test_stream: Stream = Vec::from([
+            ((1526985054069, 0), Vec::from([
+                String::from("temperature"), String::from("36"),
+                String::from("humidity"), String::from("95")
+            ])),
+            ((1526985054079, 0), Vec::from([
+                String::from("temperature"), String::from("37"),
+                String::from("humidity"), String::from("94")
+            ]))
+        ]);
+
+        let result = resp_stream_array(&test_stream);
+        let expect = b"*2\r\n\
+            *2\r\n\
+            $15\r\n1526985054069-0\r\n\
+            *4\r\n\
+            $11\r\ntemperature\r\n\
+            $2\r\n36\r\n\
+            $8\r\nhumidity\r\n\
+            $2\r\n95\r\n\
+            *2\r\n\
+            $15\r\n1526985054079-0\r\n\
+            *4\r\n\
+            $11\r\ntemperature\r\n\
+            $2\r\n37\r\n\
+            $8\r\nhumidity\r\n\
+            $2\r\n94\r\n";
+
+        dbg!(result.len());
+        dbg!(expect.len());
+        println!("{:?}", String::from_utf8(result.clone()));
+        println!("{:?}", String::from_utf8(expect.to_vec()));
+        assert_eq!(result, expect);
     }
 }

@@ -6,13 +6,13 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::resp::build::ErrorType;
 
-type StreamID = String;
-type Stream = HashMap<StreamID, HashMap<String, String>>;
+pub type StreamID = (i64, i64);
+pub type Stream = Vec<(StreamID, Vec<String>)>;
 
 enum Value {
     STRING(String),
     LIST(Vec<String>),
-    STREAM((i64, i64), Stream), // (i64, i64): Last ID.
+    STREAM(Stream),
 }
 
 enum Time {
@@ -354,7 +354,7 @@ fn handle_type(
             match entry.value {
                 Value::STRING(_) => response = "string",
                 Value::LIST(_) =>   response = "list",
-                Value::STREAM(_, _) => response = "stream",
+                Value::STREAM(_) => response = "stream",
             }
         },
         None => response = "none",
@@ -365,7 +365,7 @@ fn handle_type(
     Ok(())
 }
 
-fn parse_stream_id(id: &str) -> (i64, i64) {
+fn parse_stream_id(id: &str) -> StreamID {
     if id.starts_with('*') {
         return (-1, -1);
     }
@@ -383,8 +383,8 @@ fn parse_stream_id(id: &str) -> (i64, i64) {
 
 fn validate_stream_id(
     response: &mut Vec<u8>,
-    previous: &(i64, i64),
-    new: &(i64, i64)
+    previous: &StreamID,
+    new: &StreamID
 ) -> bool {
     const ZERO_ERR_MSG: &str =
         "The ID specified in XADD must be greater than 0-0";
@@ -409,9 +409,9 @@ fn validate_stream_id(
 }
 
 fn generate_stream_id(
-    id_pair: &(i64, i64),
-    previous: &(i64, i64)
-) -> ((i64, i64), Vec<u8>) {
+    id_pair: &StreamID,
+    previous: &StreamID
+) -> (StreamID, Vec<u8>) {
     let mut num_pair: (i64, i64) = (0, 0);
 
     if id_pair.0 != -1 && id_pair.1 != -1 {
@@ -449,39 +449,81 @@ fn handle_xadd(
 ) -> io::Result<()> {
     let key = arguments[1].clone();
     let id = &arguments[2];
-    let mut map = HashMap::new();
+    let array = Vec::from(&arguments[3..]);
     let mut response: Vec<u8> = Vec::new();
-
-    for pair in (&arguments[3..]).chunks(2) {
-        map.insert(pair[0].clone(), pair[1].clone());
-    }
 
     let mut guard = store.lock().unwrap();
     let mut id_pair = parse_stream_id(id);
     match guard.get_mut(&key) {
         Some(entry) => {
-            if let Value::STREAM(previous, entries) = &mut entry.value {
+            if let Value::STREAM(stream) = &mut entry.value {
+                let previous = &stream.last().unwrap().0;
                 (id_pair, response) = generate_stream_id(&id_pair, previous);
                 if validate_stream_id(&mut response, previous, &id_pair) {
-                    entries.insert(id.clone(), map);
-                    *previous = id_pair;
+                    stream.push((id_pair, array));
                 }
             }
         },
         None => {
             (id_pair, response) = generate_stream_id(&id_pair, &(0, 0));
             if validate_stream_id(&mut response, &(0, 0), &id_pair) {
-                let id_map = HashMap::from([
-                    (id.clone(), map)
-                ]);
+                let entries = Vec::from([(id_pair, array)]);
                 guard.insert(key, ValueEntry {
-                    value: Value::STREAM(id_pair, id_map),
+                    value: Value::STREAM(entries),
                     time: Time::VAR
                 });
             }
         }
     }
 
+    stream.write_all(&response)?;
+    Ok(())
+}
+
+fn parse_range_id(id_str: &str, default: i64) -> StreamID {
+    match id_str.find('-') {
+        Some(pos) => {
+            let time: i64 = id_str[..pos].parse().unwrap();
+            let seq: i64 = id_str[pos + 1..1].parse().unwrap();
+
+            (time, seq)
+        },
+        None => (id_str.parse::<i64>().unwrap(), default),
+    }
+}
+
+fn id_in_range(id: &StreamID, start: &StreamID, end: &StreamID) -> bool {
+    if id.0 < start.0 || (id.0 == start.0 && id.1 < start.1) {
+        return false;
+    }
+
+    if id.0 > end.0 || (id.0 == end.0 && id.1 > end.1) {
+        return false;
+    }
+
+    true
+}
+
+fn handle_xrange(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    let start_id = parse_range_id(&arguments[2], 0);
+    let end_id = parse_range_id(&arguments[3], i64::MAX);
+    let mut range_entries: Stream = Stream::new();
+
+    if let Some(entry) = store.lock().unwrap().get(&arguments[1]) {
+        if let Value::STREAM(stream) = &entry.value {
+            range_entries = stream
+                .iter()
+                .cloned()
+                .filter(|x| id_in_range(&x.0, &start_id, &end_id))
+                    .collect();
+        }
+    }
+
+    let response = resp::build::resp_stream_array(&range_entries);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -513,6 +555,7 @@ pub fn handle_commands(
         "SET" =>    handle_set(commands, stream, store)?,
         "TYPE" =>   handle_type(commands, stream, store)?,
         "XADD" =>   handle_xadd(commands, stream, store)?,
+        "XRANGE" => handle_xrange(commands, stream, store)?,
         _ => {
             return Ok(());
         }

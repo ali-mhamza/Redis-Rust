@@ -3,6 +3,7 @@ pub mod connect;
 pub mod resp;
 
 pub use commands::DataTable;
+pub use commands::{Stream, StreamID};
 use std::io;
 use std::net::{TcpListener};
 
