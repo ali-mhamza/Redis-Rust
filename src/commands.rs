@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::resp::build::ErrorType;
 
 type StreamID = String;
@@ -412,16 +412,26 @@ fn generate_stream_id(
     id_pair: &(i64, i64),
     previous: &(i64, i64)
 ) -> ((i64, i64), Vec<u8>) {
-    let num_pair: (i64, i64);
+    let mut num_pair: (i64, i64) = (0, 0);
 
     if id_pair.0 != -1 && id_pair.1 != -1 {
         num_pair = *id_pair;
-    } else if id_pair.0 == previous.0 {
-        num_pair = (id_pair.0, previous.1 + 1);
-    } else if id_pair.0 != 0 {
-        num_pair = (id_pair.0, 0);
     } else {
-        num_pair = (id_pair.0, 1);
+        num_pair.0 = if id_pair.0 == -1 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap()
+                .as_millis() as i64
+        } else {
+            id_pair.0
+        };
+
+        if num_pair.0 == previous.0 {
+            num_pair.1 = previous.1 + 1;
+        } else if num_pair.0 != 0 {
+            num_pair.1 = 0;
+        } else {
+            num_pair.1 = 1;
+        }
     }
 
     let mut pair_str = String::new();
