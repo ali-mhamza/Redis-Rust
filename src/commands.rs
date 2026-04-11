@@ -536,6 +536,48 @@ fn handle_xrange(
     Ok(())
 }
 
+fn handle_xread(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    const SKIP_ARGS: usize = 2;
+    let stream_count = (arguments.len() - 2) / 2;
+    let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
+
+    for i in 0..stream_count {
+        stream_pairs.push((
+            String::from(&arguments[SKIP_ARGS + i]),
+            parse_stream_id(&arguments[SKIP_ARGS + stream_count + i])
+        ));
+    }
+
+    let mut stream_array = Vec::new();
+    let guard = store.lock().unwrap();
+    for pair in stream_pairs {
+        if let Some(entry) = guard.get(&pair.0) {
+            if let Value::STREAM(stream) = &entry.value {
+                // Exclusive, so minimum is 1 sequence higher than
+                // the ID provided.
+                let min = (pair.1.0, pair.1.1 + 1);
+                let valid_entries: Stream = stream
+                    .iter()
+                    .cloned()
+                    .filter(
+                        // No actual maximum.
+                        |x| id_in_range(&x.0, &min, &(i64::MAX, i64::MAX))
+                    )
+                    .collect();
+                stream_array.push((pair.0, valid_entries));
+            }
+        }
+    }
+
+    let response = resp::build::resp_stream_multi_array(&stream_array);
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 pub fn handle_commands(
     commands: &Vec<String>,
     stream: &mut TcpStream,
@@ -564,6 +606,7 @@ pub fn handle_commands(
         "TYPE" =>   handle_type(commands, stream, store)?,
         "XADD" =>   handle_xadd(commands, stream, store)?,
         "XRANGE" => handle_xrange(commands, stream, store)?,
+        "XREAD" =>  handle_xread(commands, stream, store)?,
         _ => {
             return Ok(());
         }

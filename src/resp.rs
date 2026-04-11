@@ -61,6 +61,7 @@ pub mod build {
     use crate::{Stream, StreamID};
 
     const CRLF_BYTES: &[u8] = b"\r\n";
+    const STREAM_PAIR_SIZE: &[u8] = b"*2\r\n";
 
     enum SizeType { STRING, ARRAY }
     pub enum ErrorType { ERR, WRONGTYPE, }
@@ -148,7 +149,6 @@ pub mod build {
 
     pub fn resp_stream_array(stream: &Stream) -> Vec<u8> {
         let mut vec= Vec::new();
-        const STREAM_PAIR_SIZE: &[u8] = b"*2\r\n";
 
         vec.extend(resp_size(stream.len(), SizeType::ARRAY));
 
@@ -162,6 +162,19 @@ pub mod build {
             for entry in &pair.1 {
                 vec.extend(resp_bulk_str(entry));
             }
+        }
+
+        vec
+    }
+
+    pub fn resp_stream_multi_array(array: &[(String, Stream)]) -> Vec<u8> {
+        let mut vec = Vec::new();
+        vec.extend(resp_size(array.len(), SizeType::ARRAY));
+
+        for pair in array {
+            vec.extend(STREAM_PAIR_SIZE);
+            vec.extend(resp_bulk_str(&pair.0));
+            vec.extend(resp_stream_array(&pair.1));
         }
 
         vec
@@ -261,6 +274,32 @@ mod test {
             $2\r\n36\r\n\
             $8\r\nhumidity\r\n\
             $2\r\n95\r\n\
+            *2\r\n\
+            $15\r\n1526985054079-0\r\n\
+            *4\r\n\
+            $11\r\ntemperature\r\n\
+            $2\r\n37\r\n\
+            $8\r\nhumidity\r\n\
+            $2\r\n94\r\n";
+
+        assert_eq!(result, expect);
+    }
+
+    #[test]
+    fn test_stream_multi_array() {
+        let stream : Stream = Vec::from([
+            ((1526985054079, 0), Vec::from([
+                String::from("temperature"), String::from("37"),
+                String::from("humidity"), String::from("94")
+            ]))
+        ]);
+
+        let stream = vec![(String::from("some_key"), stream)];
+        let result = resp_stream_multi_array(&stream);
+        let expect = b"*1\r\n\
+            *2\r\n\
+            $8\r\nsome_key\r\n\
+            *1\r\n\
             *2\r\n\
             $15\r\n1526985054079-0\r\n\
             *4\r\n\
