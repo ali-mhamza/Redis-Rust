@@ -411,18 +411,25 @@ fn validate_stream_id(
 fn generate_stream_id(
     id_pair: &(i64, i64),
     previous: &(i64, i64)
-) -> (i64, i64) {
+) -> ((i64, i64), Vec<u8>) {
+    let num_pair: (i64, i64);
+
     if id_pair.0 != -1 && id_pair.1 != -1 {
-        return *id_pair;
+        num_pair = *id_pair;
+    } else if id_pair.0 == previous.0 {
+        num_pair = (id_pair.0, previous.1 + 1);
+    } else if id_pair.0 != 0 {
+        num_pair = (id_pair.0, 0);
+    } else {
+        num_pair = (id_pair.0, 1);
     }
 
-    if id_pair.0 == previous.0 {
-        (id_pair.0, previous.1 + 1)
-    } else if id_pair.0 != 0 {
-        (id_pair.0, 0)
-    } else {
-        (id_pair.0, 1)
-    }
+    let mut pair_str = String::new();
+    pair_str.push_str(&num_pair.0.to_string());
+    pair_str.push('-');
+    pair_str.push_str(&num_pair.1.to_string());
+
+    (num_pair, resp::build::resp_bulk_str(&pair_str))
 }
 
 fn handle_xadd(
@@ -433,7 +440,7 @@ fn handle_xadd(
     let key = arguments[1].clone();
     let id = &arguments[2];
     let mut map = HashMap::new();
-    let mut response = resp::build::resp_bulk_str(id);
+    let mut response: Vec<u8> = Vec::new();
 
     for pair in (&arguments[3..]).chunks(2) {
         map.insert(pair[0].clone(), pair[1].clone());
@@ -444,7 +451,7 @@ fn handle_xadd(
     match guard.get_mut(&key) {
         Some(entry) => {
             if let Value::STREAM(previous, entries) = &mut entry.value {
-                id_pair = generate_stream_id(&id_pair, previous);
+                (id_pair, response) = generate_stream_id(&id_pair, previous);
                 if validate_stream_id(&mut response, previous, &id_pair) {
                     entries.insert(id.clone(), map);
                     *previous = id_pair;
@@ -452,7 +459,7 @@ fn handle_xadd(
             }
         },
         None => {
-            id_pair = generate_stream_id(&id_pair, &(0, 0));
+            (id_pair, response) = generate_stream_id(&id_pair, &(0, 0));
             if validate_stream_id(&mut response, &(0, 0), &id_pair) {
                 let id_map = HashMap::from([
                     (id.clone(), map)
