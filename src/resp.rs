@@ -114,7 +114,7 @@ pub mod build {
 
     pub fn resp_error(error: ErrorType, msg: &str) -> Vec<u8> {
         let mut vec = match error {
-            ErrorType::ERR => Vec::from("-ERR "),
+            ErrorType::ERR =>       Vec::from("-ERR "),
             ErrorType::WRONGTYPE => Vec::from("-WRONGTYPE "),
         };
 
