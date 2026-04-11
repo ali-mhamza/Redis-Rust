@@ -483,6 +483,11 @@ fn handle_xadd(
 fn parse_range_id(id_str: &str, default: i64) -> StreamID {
     match id_str.find('-') {
         Some(pos) => {
+            // Assuming only the start is formatted as such.
+            if pos == 0 {
+                return (0, 0);
+            }
+
             let time: i64 = id_str[..pos].parse().unwrap();
             let seq: i64 = id_str[pos + 1..].parse().unwrap();
 
