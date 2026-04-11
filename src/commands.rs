@@ -366,9 +366,17 @@ fn handle_type(
 }
 
 fn parse_stream_id(id: &str) -> (i64, i64) {
+    if id.starts_with('*') {
+        return (-1, -1);
+    }
+
     let pos = id.find('-').unwrap();
     let first: i64 = id[..pos].parse().unwrap();
-    let second: i64 = id[pos + 1..].parse().unwrap();
+    let second: i64 = if id.ends_with('*') {
+        -1
+    } else {
+        id[pos + 1..].parse().unwrap()
+    };
 
     (first, second)
 }
@@ -400,6 +408,23 @@ fn validate_stream_id(
     true
 }
 
+fn generate_stream_id(
+    id_pair: &(i64, i64),
+    previous: &(i64, i64)
+) -> (i64, i64) {
+    if id_pair.0 != -1 && id_pair.1 != -1 {
+        return *id_pair;
+    }
+
+    if id_pair.0 == previous.0 {
+        (id_pair.0, previous.1 + 1)
+    } else if id_pair.0 != 0 {
+        (id_pair.0, 0)
+    } else {
+        (id_pair.0, 1)
+    }
+}
+
 fn handle_xadd(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -415,10 +440,11 @@ fn handle_xadd(
     }
 
     let mut guard = store.lock().unwrap();
-    let id_pair = parse_stream_id(id);
+    let mut id_pair = parse_stream_id(id);
     match guard.get_mut(&key) {
         Some(entry) => {
             if let Value::STREAM(previous, entries) = &mut entry.value {
+                id_pair = generate_stream_id(&id_pair, previous);
                 if validate_stream_id(&mut response, previous, &id_pair) {
                     entries.insert(id.clone(), map);
                     *previous = id_pair;
@@ -426,6 +452,7 @@ fn handle_xadd(
             }
         },
         None => {
+            id_pair = generate_stream_id(&id_pair, &(0, 0));
             if validate_stream_id(&mut response, &(0, 0), &id_pair) {
                 let id_map = HashMap::from([
                     (id.clone(), map)
