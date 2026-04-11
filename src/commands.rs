@@ -481,9 +481,12 @@ fn handle_xadd(
 }
 
 fn parse_range_id(id_str: &str, default: i64) -> StreamID {
+    if id_str.starts_with('+') {
+        return (i64::MAX, i64::MAX);
+    }
+
     match id_str.find('-') {
         Some(pos) => {
-            // Assuming only the start is formatted as such.
             if pos == 0 {
                 return (0, 0);
             }
