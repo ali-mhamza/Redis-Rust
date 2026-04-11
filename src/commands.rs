@@ -484,7 +484,7 @@ fn parse_range_id(id_str: &str, default: i64) -> StreamID {
     match id_str.find('-') {
         Some(pos) => {
             let time: i64 = id_str[..pos].parse().unwrap();
-            let seq: i64 = id_str[pos + 1..1].parse().unwrap();
+            let seq: i64 = id_str[pos + 1..].parse().unwrap();
 
             (time, seq)
         },
