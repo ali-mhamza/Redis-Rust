@@ -591,33 +591,24 @@ fn handle_xrange(
     Ok(())
 }
 
-fn block_xread(
-    arguments: &Vec<String>,
-    targets: &[&str]
-) {
-    if !block_exists(targets) {
-        init_block(arguments, targets, 2);
-    }
-}
-
 fn handle_xread(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    let mut skip_args: usize = 2;
+    let block = (&arguments[1]).to_uppercase() == "BLOCK";
+    let skip_args = if block { 2 } else { 4 };
     let stream_count = (arguments.len() - skip_args) / 2;
-    let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
     let targets: Vec<&str> = (&arguments[skip_args..skip_args + stream_count])
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    if (&arguments[1]).to_uppercase() == "BLOCK" {
-        block_xread(arguments, &targets);
-        skip_args += 2;
+    if block && !block_exists(&targets) {
+        init_block(arguments, &targets, 2);
     }
 
+    let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
     for i in 0..stream_count {
         stream_pairs.push((
             String::from(&arguments[skip_args + i]),
