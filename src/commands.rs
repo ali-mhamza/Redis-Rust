@@ -41,6 +41,49 @@ static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 
 // Global block list.
 
+fn init_block(
+    arguments: &Vec<String>,
+    targets: &[&str],
+    timeout_arg_pos: usize
+) {
+    let timeout = arguments
+        .get(timeout_arg_pos)
+        .and_then(|s| s.parse::<f32>().ok())
+        .map(|secs| Duration::from_millis((secs * 1000.0) as u64))
+        .unwrap_or(Duration::ZERO);
+    let block = get_block_set();
+    let mut table = block.lock().unwrap();
+    let cond = Arc::new((Mutex::new(false), Condvar::new()));
+
+    // Add so other clients can't block on it.
+    for &target in targets {
+        (&mut table).insert(String::from(target), Arc::clone(&cond));
+    }
+    // Unblock table while waiting so other threads can
+    // update it.
+    drop(table);
+
+    let (lock, cvar) = &*cond;
+    let mut started = lock.lock().unwrap();
+    if timeout.is_zero() {
+        while !*started {
+            started = cvar.wait(started).unwrap();
+        }
+    } else {
+        while !*started {
+            let (s, time_result) = cvar
+                .wait_timeout(started, timeout)
+                .unwrap();
+            started = s;
+            if time_result.timed_out() {
+                break;
+            }
+        }
+    }
+
+    // Blocks should be removed by the caller.
+}
+
 fn get_block_set() -> Arc<Mutex<BlockTable>> {
     let set = BLOCK_SET.get_or_init(|| {
         Arc::new(Mutex::new(BlockTable::new()))
@@ -49,9 +92,24 @@ fn get_block_set() -> Arc<Mutex<BlockTable>> {
     Arc::clone(set)
 }
 
-fn release_blocks(target: &str) {
+fn block_exists(targets: &[&str]) -> bool {
     let block = get_block_set();
-    match block.lock().unwrap().get_mut(target) {
+    let table = block.lock().unwrap();
+    for &target in targets {
+        if table.get(target).is_some() {
+            return true;
+        }
+    }
+
+    false
+}
+
+// Notifies the idle thread that the blocking condition
+// has been met to wake it up.
+fn release_block(target: &str) {
+    let block = get_block_set();
+    let mut guard = block.lock().unwrap();
+    match guard.get_mut(target) {
         Some(var) => {
             let mut mutex = (&var.0).lock().unwrap();
             *mutex = true;
@@ -59,6 +117,16 @@ fn release_blocks(target: &str) {
         },
         None => {}
     }
+
+    // Does nothing if target was not found.
+    guard.remove(target);
+}
+
+// Removes the target block from the block list.
+fn remove_block(target: &str) {
+    let block = get_block_set();
+    let mut table = block.lock().unwrap();
+    (&mut table).remove(target);
 }
 
 /* LPUSH/RPUSH */
@@ -204,44 +272,13 @@ fn handle_blpop(
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    let mut response = Vec::from(NULL_BULK_ARRAY);
     let name = &arguments[1];
-    let timeout = arguments
-        .get(2)
-        .and_then(|s| s.parse::<f32>().ok())
-        .map(|secs| Duration::from_millis((secs * 1000.0) as u64))
-        .unwrap_or(Duration::ZERO);
-
-    let block = get_block_set();
-    let mut table = block.lock().unwrap();
-    if table.get(name).is_some() {
-        return Ok(())
+    if (block_exists(&[name])) {
+        return Ok(());
     }
 
-    let cond = Arc::new((Mutex::new(false), Condvar::new()));
-    // Add so other clients can't block on it.
-    (&mut table).insert(name.clone(), Arc::clone(&cond));
-    // Unblock table while waiting so other threads can
-    // update it.
-    drop(table);
-
-    let (lock, cvar) = &*cond;
-    let mut started = lock.lock().unwrap();
-    if timeout.is_zero() {
-        while !*started {
-            started = cvar.wait(started).unwrap();
-        }
-    } else {
-        while !*started {
-            let (s, time_result) = cvar
-                .wait_timeout(started, timeout)
-                .unwrap();
-            started = s;
-            if time_result.timed_out() {
-                break;
-            }
-        }
-    }
+    let mut response = Vec::from(NULL_BULK_ARRAY);
+    init_block(arguments, &[name], 2);
 
     if let Some(entry) = store.lock().unwrap().get_mut(name) {
         if let Value::LIST(list) = &mut entry.value {
@@ -250,9 +287,8 @@ fn handle_blpop(
         }
     }
 
-    // Remove so new clients can (now) block on it.
-    table = block.lock().unwrap();
-    (&mut table).remove(name);
+    // Unblock so new clients can (now) block on it.
+    remove_block(name);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -362,7 +398,7 @@ fn handle_list_push(
         }
     }
 
-    release_blocks(&arguments[1]);
+    release_block(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -526,6 +562,7 @@ fn handle_xadd(
         }
     }
 
+    release_block(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -554,19 +591,39 @@ fn handle_xrange(
     Ok(())
 }
 
+fn block_xread(
+    arguments: &Vec<String>,
+    targets: &[&str]
+) {
+    if (block_exists(targets)) {
+        return;
+    }
+
+    init_block(arguments, targets, 2);
+}
+
 fn handle_xread(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    const SKIP_ARGS: usize = 2;
-    let stream_count = (arguments.len() - 2) / 2;
+    let mut skip_args: usize = 2;
+    let stream_count = (arguments.len() - skip_args) / 2;
     let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
+    let targets: Vec<&str> = (&arguments[skip_args..skip_args + stream_count])
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    if (&arguments[1]).to_uppercase() == "BLOCK" {
+        block_xread(arguments, &targets);
+        skip_args += 2;
+    }
 
     for i in 0..stream_count {
         stream_pairs.push((
-            String::from(&arguments[SKIP_ARGS + i]),
-            parse_stream_id(&arguments[SKIP_ARGS + stream_count + i])
+            String::from(&arguments[skip_args + i]),
+            parse_stream_id(&arguments[skip_args + stream_count + i])
         ));
     }
 
@@ -591,6 +648,7 @@ fn handle_xread(
         }
     }
 
+    targets.iter().for_each(|&target| remove_block(target));
     let response = resp::build::resp_stream_multi_array(&stream_array);
     stream.write_all(&response)?;
     Ok(())
