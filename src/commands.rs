@@ -6,8 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::resp::build::ErrorType;
 
-pub type StreamID = (i64, i64);
-pub type Stream = Vec<(StreamID, Vec<String>)>;
+/* Structs */
 
 enum Value {
     STRING(String),
@@ -25,13 +24,22 @@ pub struct ValueEntry {
     time: Time
 }
 
+/* Type aliases */
+
+pub type StreamID = (i64, i64);
+pub type Stream = Vec<(StreamID, Vec<String>)>;
 pub type DataTable = HashMap<String, ValueEntry>;
+type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
+
+/* Globals */
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
-
-type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
 static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
+
+/* General helpers */
+
+// Global block list.
 
 fn get_block_set() -> Arc<Mutex<BlockTable>> {
     let set = BLOCK_SET.get_or_init(|| {
@@ -40,6 +48,156 @@ fn get_block_set() -> Arc<Mutex<BlockTable>> {
 
     Arc::clone(set)
 }
+
+fn release_blocks(target: &str) {
+    let block = get_block_set();
+    match block.lock().unwrap().get_mut(target) {
+        Some(var) => {
+            let mut mutex = (&var.0).lock().unwrap();
+            *mutex = true;
+            var.1.notify_one();
+        },
+        None => {}
+    }
+}
+
+/* LPUSH/RPUSH */
+
+fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
+    let mut list = Vec::from(entries);
+    if reverse {
+        list.reverse();
+    }
+
+    list
+}
+
+/* LRANGE */
+
+fn normalize_range_index(index: &mut i64, length: usize) {
+    if *index < 0 {
+        *index += length as i64;
+
+        if *index < 0 {
+            *index = 0;
+        }
+    }
+}
+
+/* XADD */
+
+fn parse_stream_id(id: &str) -> StreamID {
+    if id.starts_with('*') {
+        return (-1, -1);
+    }
+
+    let pos = id.find('-').unwrap();
+    let first: i64 = id[..pos].parse().unwrap();
+    let second: i64 = if id.ends_with('*') {
+        -1
+    } else {
+        id[pos + 1..].parse().unwrap()
+    };
+
+    (first, second)
+}
+
+/* XRANGE/XREAD */
+
+fn parse_range_id(id_str: &str, default: i64) -> StreamID {
+    if id_str.starts_with('+') {
+        return (i64::MAX, i64::MAX);
+    }
+
+    match id_str.find('-') {
+        Some(pos) => {
+            if pos == 0 {
+                return (0, 0);
+            }
+
+            let time: i64 = id_str[..pos].parse().unwrap();
+            let seq: i64 = id_str[pos + 1..].parse().unwrap();
+
+            (time, seq)
+        },
+        None => (id_str.parse::<i64>().unwrap(), default),
+    }
+}
+
+fn id_in_range(id: &StreamID, start: &StreamID, end: &StreamID) -> bool {
+    if id.0 < start.0 || (id.0 == start.0 && id.1 < start.1) {
+        return false;
+    }
+
+    if id.0 > end.0 || (id.0 == end.0 && id.1 > end.1) {
+        return false;
+    }
+
+    true
+}
+
+fn validate_stream_id(
+    response: &mut Vec<u8>,
+    previous: &StreamID,
+    new: &StreamID
+) -> bool {
+    const ZERO_ERR_MSG: &str =
+        "The ID specified in XADD must be greater than 0-0";
+    const SMALL_ERR_MSG: &str = "The ID specified in XADD is equal or \
+        smaller than the target stream top item";
+
+    if new.0 <= previous.0
+        && (new.0 != previous.0 || new.1 <= previous.1) {
+        *response = resp::build::resp_error(
+            ErrorType::ERR,
+            if new.0 == 0 && new.1 == 0 {
+                ZERO_ERR_MSG
+            } else {
+                SMALL_ERR_MSG
+            }
+        );
+
+        return false;
+    }
+
+    true
+}
+
+fn generate_stream_id(
+    id_pair: &StreamID,
+    previous: &StreamID
+) -> (StreamID, Vec<u8>) {
+    let mut num_pair: (i64, i64) = (0, 0);
+
+    if id_pair.0 != -1 && id_pair.1 != -1 {
+        num_pair = *id_pair;
+    } else {
+        num_pair.0 = if id_pair.0 == -1 {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH).unwrap()
+                .as_millis() as i64
+        } else {
+            id_pair.0
+        };
+
+        if num_pair.0 == previous.0 {
+            num_pair.1 = previous.1 + 1;
+        } else if num_pair.0 != 0 {
+            num_pair.1 = 0;
+        } else {
+            num_pair.1 = 1;
+        }
+    }
+
+    let mut pair_str = String::new();
+    pair_str.push_str(&num_pair.0.to_string());
+    pair_str.push('-');
+    pair_str.push_str(&num_pair.1.to_string());
+
+    (num_pair, resp::build::resp_bulk_str(&pair_str))
+}
+
+/* Main handlers */
 
 fn handle_blpop(
     arguments: &Vec<String>,
@@ -131,16 +289,6 @@ fn handle_get(
     Ok(())
 }
 
-fn normalize_range_index(index: &mut i64, length: usize) {
-    if *index < 0 {
-        *index += length as i64;
-
-        if *index < 0 {
-            *index = 0;
-        }
-    }
-}
-
 fn handle_lrange(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -182,27 +330,6 @@ fn handle_lrange(
     Ok(())
 }
 
-fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
-    let mut list = Vec::from(entries);
-    if reverse {
-        list.reverse();
-    }
-
-    list
-}
-
-fn check_blocks(target: &str) {
-    let block = get_block_set();
-    match block.lock().unwrap().get_mut(target) {
-        Some(var) => {
-            let mut mutex = (&var.0).lock().unwrap();
-            *mutex = true;
-            var.1.notify_one();
-        },
-        None => {}
-    }
-}
-
 fn handle_list_push(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -235,7 +362,7 @@ fn handle_list_push(
         }
     }
 
-    check_blocks(&arguments[1]);
+    release_blocks(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -365,83 +492,6 @@ fn handle_type(
     Ok(())
 }
 
-fn parse_stream_id(id: &str) -> StreamID {
-    if id.starts_with('*') {
-        return (-1, -1);
-    }
-
-    let pos = id.find('-').unwrap();
-    let first: i64 = id[..pos].parse().unwrap();
-    let second: i64 = if id.ends_with('*') {
-        -1
-    } else {
-        id[pos + 1..].parse().unwrap()
-    };
-
-    (first, second)
-}
-
-fn validate_stream_id(
-    response: &mut Vec<u8>,
-    previous: &StreamID,
-    new: &StreamID
-) -> bool {
-    const ZERO_ERR_MSG: &str =
-        "The ID specified in XADD must be greater than 0-0";
-    const SMALL_ERR_MSG: &str = "The ID specified in XADD is equal or \
-        smaller than the target stream top item";
-
-    if new.0 <= previous.0
-        && (new.0 != previous.0 || new.1 <= previous.1) {
-        *response = resp::build::resp_error(
-            ErrorType::ERR,
-            if new.0 == 0 && new.1 == 0 {
-                ZERO_ERR_MSG
-            } else {
-                SMALL_ERR_MSG
-            }
-        );
-
-        return false;
-    }
-
-    true
-}
-
-fn generate_stream_id(
-    id_pair: &StreamID,
-    previous: &StreamID
-) -> (StreamID, Vec<u8>) {
-    let mut num_pair: (i64, i64) = (0, 0);
-
-    if id_pair.0 != -1 && id_pair.1 != -1 {
-        num_pair = *id_pair;
-    } else {
-        num_pair.0 = if id_pair.0 == -1 {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH).unwrap()
-                .as_millis() as i64
-        } else {
-            id_pair.0
-        };
-
-        if num_pair.0 == previous.0 {
-            num_pair.1 = previous.1 + 1;
-        } else if num_pair.0 != 0 {
-            num_pair.1 = 0;
-        } else {
-            num_pair.1 = 1;
-        }
-    }
-
-    let mut pair_str = String::new();
-    pair_str.push_str(&num_pair.0.to_string());
-    pair_str.push('-');
-    pair_str.push_str(&num_pair.1.to_string());
-
-    (num_pair, resp::build::resp_bulk_str(&pair_str))
-}
-
 fn handle_xadd(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -478,38 +528,6 @@ fn handle_xadd(
 
     stream.write_all(&response)?;
     Ok(())
-}
-
-fn parse_range_id(id_str: &str, default: i64) -> StreamID {
-    if id_str.starts_with('+') {
-        return (i64::MAX, i64::MAX);
-    }
-
-    match id_str.find('-') {
-        Some(pos) => {
-            if pos == 0 {
-                return (0, 0);
-            }
-
-            let time: i64 = id_str[..pos].parse().unwrap();
-            let seq: i64 = id_str[pos + 1..].parse().unwrap();
-
-            (time, seq)
-        },
-        None => (id_str.parse::<i64>().unwrap(), default),
-    }
-}
-
-fn id_in_range(id: &StreamID, start: &StreamID, end: &StreamID) -> bool {
-    if id.0 < start.0 || (id.0 == start.0 && id.1 < start.1) {
-        return false;
-    }
-
-    if id.0 > end.0 || (id.0 == end.0 && id.1 > end.1) {
-        return false;
-    }
-
-    true
 }
 
 fn handle_xrange(
@@ -577,6 +595,8 @@ fn handle_xread(
     stream.write_all(&response)?;
     Ok(())
 }
+
+/* Main driver */
 
 pub fn handle_commands(
     commands: &Vec<String>,
