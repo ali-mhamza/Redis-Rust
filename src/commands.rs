@@ -273,7 +273,7 @@ fn handle_blpop(
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let name = &arguments[1];
-    if (block_exists(&[name])) {
+    if block_exists(&[name]) {
         return Ok(());
     }
 
@@ -595,11 +595,9 @@ fn block_xread(
     arguments: &Vec<String>,
     targets: &[&str]
 ) {
-    if (block_exists(targets)) {
-        return;
+    if !block_exists(targets) {
+        init_block(arguments, targets, 2);
     }
-
-    init_block(arguments, targets, 2);
 }
 
 fn handle_xread(
