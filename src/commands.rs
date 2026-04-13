@@ -179,6 +179,8 @@ fn parse_stream_id(id: &str) -> StreamID {
 fn parse_range_id(id_str: &str, default: i64) -> StreamID {
     if id_str.starts_with('+') {
         return (i64::MAX, i64::MAX);
+    } else if id_str.starts_with('$') {
+        return (-1, -1);
     }
 
     match id_str.find('-') {
@@ -622,7 +624,7 @@ fn handle_xread(
     for i in 0..stream_count {
         stream_pairs.push((
             String::from(&arguments[skip_args + i]),
-            parse_stream_id(&arguments[skip_args + stream_count + i])
+            parse_range_id(&arguments[skip_args + stream_count + i], 0)
         ));
     }
 
@@ -633,7 +635,11 @@ fn handle_xread(
             if let Value::STREAM(stream) = &entry.value {
                 // Exclusive, so minimum is 1 sequence higher than
                 // the ID provided.
-                let min = (pair.1.0, pair.1.1 + 1);
+                let min = if pair.1.0 == -1 && let Some(max) = stream.last() {
+                    (max.0.0, max.0.1 + 1)
+                } else { // Assuming no -1 in pair.
+                    (pair.1.0, pair.1.1 + 1)
+                };
                 let valid_entries: Stream = stream
                     .iter()
                     .cloned()
