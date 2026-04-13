@@ -611,15 +611,6 @@ fn handle_xread(
         .map(|s| s.as_str())
         .collect();
 
-    if block && !block_exists(&targets) {
-        let timeout = parse_timeout(&arguments[2], false);
-        if !init_block(&targets, timeout) {
-            targets.iter().for_each(|&target| remove_block(target));
-            stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
-            return Ok(());
-        }
-    }
-
     let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
     for i in 0..stream_count {
         stream_pairs.push((
@@ -633,24 +624,38 @@ fn handle_xread(
     for pair in stream_pairs {
         if let Some(entry) = guard.get(&pair.0) {
             if let Value::STREAM(stream) = &entry.value {
+                let max = match stream.last() {
+                    Some(max) => max.0,
+                    None => (0, 0)
+                };
+
                 // Exclusive, so minimum is 1 sequence higher than
                 // the ID provided.
-                let min = if pair.1.0 == -1 && let Some(max) = stream.last() {
-                    (max.0.0, max.0.1 + 1)
+                let min = if pair.1.0 == -1 {
+                    (max.0, max.1 + 1)
                 } else { // Assuming no -1 in pair.
                     (pair.1.0, pair.1.1 + 1)
                 };
-                dbg!(min);
-                let valid_entries: Stream = stream
-                    .iter()
-                    .cloned()
+                let valid_entries: Stream = stream.iter().cloned()
                     .filter(
                         // No actual maximum.
                         |x| id_in_range(&x.0, &min, &(i64::MAX, i64::MAX))
-                    )
-                    .collect();
+                    ).collect();
                 stream_array.push((pair.0, valid_entries));
             }
+        }
+    }
+
+    if block {
+        if !block_exists(&targets) {
+            let timeout = parse_timeout(&arguments[2], false);
+            if !init_block(&targets, timeout) {
+                targets.iter().for_each(|&target| remove_block(target));
+                stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
+                return Ok(());
+            }
+        } else {
+            return Ok(());
         }
     }
 
