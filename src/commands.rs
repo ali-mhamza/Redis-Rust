@@ -637,6 +637,7 @@ fn handle_multi_exec(
         if commands[0] == "DISCARD" {
             response = resp::build::resp_simple_str("OK");
             stream.write_all(&response)?;
+            clear_thread_watches();
             return Ok(());
         } else if commands[0] == "WATCH" {
             response = resp::build::resp_error(ErrorType::ERR,
