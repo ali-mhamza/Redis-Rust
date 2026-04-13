@@ -44,13 +44,8 @@ static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 fn init_block(
     arguments: &Vec<String>,
     targets: &[&str],
-    timeout_arg_pos: usize
+    timeout: Duration
 ) {
-    let timeout = arguments
-        .get(timeout_arg_pos)
-        .and_then(|s| s.parse::<f32>().ok())
-        .map(|secs| Duration::from_millis((secs * 1000.0) as u64))
-        .unwrap_or(Duration::ZERO);
     let block = get_block_set();
     let mut table = block.lock().unwrap();
     let cond = Arc::new((Mutex::new(false), Condvar::new()));
@@ -127,6 +122,18 @@ fn remove_block(target: &str) {
     let block = get_block_set();
     let mut table = block.lock().unwrap();
     (&mut table).remove(target);
+}
+
+fn parse_timeout(string: &str, secs: bool) -> Duration {
+    if secs { // Input is in seconds (e.g., 0.5s).
+        string.parse::<f32>().ok()
+            .map(|time| Duration::from_millis((time * 1000.0) as u64))
+            .unwrap_or(Duration::ZERO)
+    } else { // Input is in milliseconds.
+        string.parse::<u64>().ok()
+            .map(|time| Duration::from_millis(time))
+            .unwrap_or(Duration::ZERO)
+    }
 }
 
 /* LPUSH/RPUSH */
@@ -278,7 +285,8 @@ fn handle_blpop(
     }
 
     let mut response = Vec::from(NULL_BULK_ARRAY);
-    init_block(arguments, &[name], 2);
+    let timeout = parse_timeout(&arguments[2], true);
+    init_block(arguments, &[name], timeout);
 
     if let Some(entry) = store.lock().unwrap().get_mut(name) {
         if let Value::LIST(list) = &mut entry.value {
@@ -605,7 +613,8 @@ fn handle_xread(
         .collect();
 
     if block && !block_exists(&targets) {
-        init_block(arguments, &targets, 2);
+        let timeout = parse_timeout(&arguments[2], false);
+        init_block(arguments, &targets, timeout);
     }
 
     let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
