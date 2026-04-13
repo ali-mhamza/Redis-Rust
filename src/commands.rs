@@ -563,9 +563,15 @@ fn handle_multi_exec(
     stream.write_all(&response)?;
     loop {
         let commands = utils::read_input(&mut stream)?;
-        if commands[0] == "EXEC" {
+
+        if commands[0] == "DISCARD" {
+            response = resp::build::resp_simple_str("OK");
+            stream.write_all(&response)?;
+            return Ok(());
+        } else if commands[0] == "EXEC" {
             break;
         }
+
         response = resp::build::resp_simple_str("QUEUED");
         stream.write_all(&response)?;
         transaction.push(commands);
@@ -767,12 +773,18 @@ pub fn handle_command(
 
     match &cmd[..] {
         "BLPOP" =>  handle_blpop(arguments, stream, store)?,
+        "DISCARD" => {
+            response = resp::build::resp_error(
+                ErrorType::ERR, "DISCARD without MULTI");
+            stream.write_all(&response)?;
+        }
         "ECHO" => {
             response = resp::build::resp_bulk_str(&arguments[1]);
             stream.write_all(&response)?;
         },
         "EXEC" => {
-            response = resp::build::resp_error(ErrorType::ERR, "EXEC without MULTI");
+            response = resp::build::resp_error(
+                ErrorType::ERR, "EXEC without MULTI");
             stream.write_all(&response)?;
         }
         "GET" =>    handle_get(arguments, stream, store)?,
