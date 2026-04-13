@@ -193,6 +193,14 @@ fn check_modified_watches() -> bool {
     false
 }
 
+fn clear_thread_watches() {
+    let thread_id = thread::current().id();
+    let thread_watch = get_thread_watch_table();
+    // Does nothing if there were no watches on the connection
+    // in the first place.
+    thread_watch.lock().unwrap().remove(&thread_id);
+}
+
 /* LPUSH/RPUSH */
 
 fn prepare_entries(entries: &[String], reverse: bool) -> Vec<String> {
@@ -648,10 +656,7 @@ fn handle_multi_exec(
     if check_modified_watches() {
         response = Vec::from(NULL_BULK_ARRAY);
         stream.write_all(&response)?;
-        return Ok(());
-    }
-
-    if transaction.len() == 0 {
+    } else if transaction.len() == 0 {
         response = resp::build::resp_array(&[]);
         stream.write_all(&response)?;
     } else {
@@ -664,6 +669,7 @@ fn handle_multi_exec(
         }
     }
 
+    clear_thread_watches();
     Ok(())
 }
 
@@ -730,12 +736,7 @@ fn handle_type(
 }
 
 fn handle_unwatch(stream: &mut TcpStream) -> io::Result<()> {
-    let thread_id = thread::current().id();
-    let thread_watch = get_thread_watch_table();
-    // Does nothing if there were no watches on the connection
-    // in the first place.
-    thread_watch.lock().unwrap().remove(&thread_id);
-
+    clear_thread_watches();
     let response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
     Ok(())
