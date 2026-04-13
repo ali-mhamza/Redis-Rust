@@ -638,7 +638,11 @@ fn handle_xread(
     }
 
     targets.iter().for_each(|&target| remove_block(target));
-    let response = resp::build::resp_stream_multi_array(&stream_array);
+    let response = if stream_array.len() == 0 {
+        Vec::from(NULL_BULK_ARRAY)
+    } else {
+        resp::build::resp_stream_multi_array(&stream_array)
+    };
     stream.write_all(&response)?;
     Ok(())
 }
