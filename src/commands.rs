@@ -559,18 +559,20 @@ fn handle_multi_exec(
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
     let mut transaction: Vec<Vec<String>> = Vec::new();
-    let response = resp::build::resp_simple_str("OK");
+    let mut response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
     loop {
         let commands = utils::read_input(&mut stream)?;
         if commands[0] == "EXEC" {
             break;
         }
+        response = resp::build::resp_simple_str("QUEUED");
+        stream.write_all(&response)?;
         transaction.push(commands);
     }
 
     if transaction.len() == 0 {
-        let response = resp::build::resp_array(&[]);
+        response = resp::build::resp_array(&[]);
         stream.write_all(&response)?;
     } else {
         for command in transaction {
