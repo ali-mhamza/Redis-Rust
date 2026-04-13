@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread;
+use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /* Structs */
@@ -34,12 +36,14 @@ pub type StreamID = (i64, i64);
 pub type Stream = Vec<(StreamID, Vec<String>)>;
 pub type DataTable = HashMap<String, ValueEntry>;
 type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
+type WatchTable = HashMap<ThreadId, Vec<String>>;
 
 /* Globals */
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
-static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
+static BLOCK_TABLE: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
+static WATCH_TABLE: OnceLock<Arc<Mutex<WatchTable>>> = OnceLock::new();
 
 /* General helpers */
 
@@ -81,7 +85,7 @@ fn init_block(targets: &[&str], timeout: Duration) -> bool {
 }
 
 fn get_block_set() -> Arc<Mutex<BlockTable>> {
-    let set = BLOCK_SET.get_or_init(|| {
+    let set = BLOCK_TABLE.get_or_init(|| {
         Arc::new(Mutex::new(BlockTable::new()))
     });
 
@@ -135,6 +139,16 @@ fn parse_timeout(string: &str, secs: bool) -> Duration {
             .map(|time| Duration::from_millis(time))
             .unwrap_or(Duration::ZERO)
     }
+}
+
+// Global watch table.
+
+fn get_watch_set() -> Arc<Mutex<WatchTable>> {
+    let set = WATCH_TABLE.get_or_init(|| {
+        Arc::new(Mutex::new(WatchTable::new()))
+    });
+
+    Arc::clone(&set)
 }
 
 /* LPUSH/RPUSH */
@@ -568,7 +582,13 @@ fn handle_multi_exec(
             response = resp::build::resp_simple_str("OK");
             stream.write_all(&response)?;
             return Ok(());
-        } else if commands[0] == "EXEC" {
+        } else if commands[0] == "WATCH" {
+            response = resp::build::resp_error(ErrorType::ERR,
+                "WATCH inside MULTI is not allowed");
+            stream.write_all(&response)?;
+            return Ok(());
+        }
+        else if commands[0] == "EXEC" {
             break;
         }
 
@@ -655,8 +675,15 @@ fn handle_type(
 }
 
 fn handle_watch(
+    arguments: &Vec<String>,
     stream: &mut TcpStream
 ) -> io::Result<()> {
+    let watch = get_watch_set();
+    watch.lock().unwrap().insert(
+        thread::current().id(),
+        Vec::from(&arguments[1..])
+    );
+
     let response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
 
@@ -810,7 +837,7 @@ pub fn handle_command(
         "RPUSH" =>  handle_list_push(arguments, stream, store, false)?,
         "SET" =>    handle_set(arguments, stream, store)?,
         "TYPE" =>   handle_type(arguments, stream, store)?,
-        "WATCH" =>  handle_watch(stream)?,
+        "WATCH" =>  handle_watch(arguments, stream)?,
         "XADD" =>   handle_xadd(arguments, stream, store)?,
         "XRANGE" => handle_xrange(arguments, stream, store)?,
         "XREAD" =>  handle_xread(arguments, stream, store)?,
