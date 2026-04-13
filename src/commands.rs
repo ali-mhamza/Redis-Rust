@@ -596,6 +596,7 @@ fn handle_xread(
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
+    dbg!(&arguments);
     let block = (&arguments[1]).to_uppercase() == "BLOCK";
     let skip_args = if block { 2 } else { 4 };
     let stream_count = (arguments.len() - skip_args) / 2;
