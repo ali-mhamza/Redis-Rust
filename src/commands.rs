@@ -654,6 +654,15 @@ fn handle_type(
     Ok(())
 }
 
+fn handle_watch(
+    stream: &mut TcpStream
+) -> io::Result<()> {
+    let response = resp::build::resp_simple_str("OK");
+    stream.write_all(&response)?;
+
+    Ok(())
+}
+
 fn handle_xadd(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -801,6 +810,7 @@ pub fn handle_command(
         "RPUSH" =>  handle_list_push(arguments, stream, store, false)?,
         "SET" =>    handle_set(arguments, stream, store)?,
         "TYPE" =>   handle_type(arguments, stream, store)?,
+        "WATCH" =>  handle_watch(stream)?,
         "XADD" =>   handle_xadd(arguments, stream, store)?,
         "XRANGE" => handle_xrange(arguments, stream, store)?,
         "XREAD" =>  handle_xread(arguments, stream, store)?,
