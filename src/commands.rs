@@ -274,6 +274,25 @@ fn generate_stream_id(
     (num_pair, resp::build::resp_bulk_str(&pair_str))
 }
 
+fn normalize_range_entries(
+    stream_pairs: &mut Vec<(String, StreamID)>,
+    store: &Arc<Mutex<DataTable>>
+) {
+    let guard = store.lock().unwrap();
+    for (name, id) in stream_pairs {
+        if id.0 != -1 && id.1 != -1 {
+            continue;
+        }
+
+        if let Some(entry) = guard.get(name) {
+            if let Value::STREAM(stream) = &entry.value {
+                let max = stream.last().unwrap().0;
+                *id = max; // Will be incremented in in_range_entries().
+            }
+        }
+    }
+}
+
 fn in_range_entries(
     stream_pairs: &Vec<(String, StreamID)>,
     store: &Arc<Mutex<DataTable>>
@@ -283,18 +302,9 @@ fn in_range_entries(
     for pair in stream_pairs {
         if let Some(entry) = guard.get(&pair.0) {
             if let Value::STREAM(stream) = &entry.value {
-                let max = match stream.last() {
-                    Some(max) => max.0,
-                    None => (0, 0)
-                };
-
                 // Exclusive, so minimum is 1 sequence higher than
                 // the ID provided.
-                let min = if pair.1.0 == -1 {
-                    (max.0, max.1 + 1)
-                } else { // Assuming no -1 in pair.
-                    (pair.1.0, pair.1.1 + 1)
-                };
+                let min = (pair.1.0, pair.1.1 + 1);
                 let valid_entries: Stream = stream.iter().cloned()
                     .filter(
                         // No actual maximum.
@@ -656,8 +666,7 @@ fn handle_xread(
         ));
     }
 
-    let stream_array = in_range_entries(&stream_pairs, &store);
-    dbg!(&stream_array);
+    normalize_range_entries(&mut stream_pairs, &store);
     let mut blocked_read_fail: bool = false;
 
     if block {
@@ -673,6 +682,7 @@ fn handle_xread(
     if blocked_read_fail {
         stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
     } else {
+        let stream_array = in_range_entries(&stream_pairs, &store);
         let response = resp::build::resp_stream_multi_array(&stream_array);
         stream.write_all(&response)?;
     }
