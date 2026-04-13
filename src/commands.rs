@@ -1,5 +1,5 @@
 use crate::resp;
-use crate::resp::build::ErrorType;
+use crate::resp::build::{ErrorType, SizeType};
 use crate::utils;
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -575,6 +575,10 @@ fn handle_multi_exec(
         response = resp::build::resp_array(&[]);
         stream.write_all(&response)?;
     } else {
+        // Artificially create an "array" of responses.
+        stream.write_all(&resp::build::resp_size(
+            transaction.len(), SizeType::ARRAY
+        ))?;
         for command in transaction {
             handle_command(&command, stream, &store)?;
         }

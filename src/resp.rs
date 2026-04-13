@@ -63,10 +63,10 @@ pub mod build {
     const CRLF_BYTES: &[u8] = b"\r\n";
     const STREAM_PAIR_SIZE: &[u8] = b"*2\r\n";
 
-    enum SizeType { STRING, ARRAY }
+    pub enum SizeType { STRING, ARRAY }
     pub enum ErrorType { ERR, WRONGTYPE, }
 
-    fn resp_size(size: usize, size_type: SizeType) -> Vec<u8> {
+    pub fn resp_size(size: usize, size_type: SizeType) -> Vec<u8> {
         let mut vec = Vec::new();
         vec.push(match size_type {
             SizeType::STRING => b'$',
