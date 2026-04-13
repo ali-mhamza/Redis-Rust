@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod connect;
 pub mod resp;
+pub mod utils;
 
 pub use commands::DataTable;
 pub use commands::{Stream, StreamID};

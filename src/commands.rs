@@ -1,5 +1,6 @@
 use crate::resp;
 use crate::resp::build::ErrorType;
+use crate::utils;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -553,6 +554,28 @@ fn handle_lpop(
     Ok(())
 }
 
+fn handle_multi_exec(
+    mut stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    let mut transaction: Vec<Vec<String>> = Vec::new();
+    let response = resp::build::resp_simple_str("OK");
+    stream.write_all(&response)?;
+    loop {
+        let commands = utils::read_input(&mut stream)?;
+        if commands[0] == "EXEC" {
+            break;
+        }
+        transaction.push(commands);
+    }
+
+    for command in transaction {
+        handle_command(&command, stream, &store)?;
+    }
+
+    Ok(())
+}
+
 fn handle_set(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -723,36 +746,41 @@ fn handle_xread(
 
 /* Main driver */
 
-pub fn handle_commands(
-    commands: &Vec<String>,
+pub fn handle_command(
+    arguments: &Vec<String>,
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    let cmd = commands[0].to_uppercase();
+    let cmd = arguments[0].to_uppercase();
     let response: Vec<u8>;
 
     match &cmd[..] {
-        "BLPOP" =>  handle_blpop(commands, stream, store)?,
+        "BLPOP" =>  handle_blpop(arguments, stream, store)?,
         "ECHO" => {
-            response = resp::build::resp_bulk_str(&commands[1]);
+            response = resp::build::resp_bulk_str(&arguments[1]);
             stream.write_all(&response)?;
         },
-        "GET" =>    handle_get(commands, stream, store)?,
-        "INCR" =>   handle_incr(commands, stream, store)?,
-        "LLEN" =>   handle_llen(commands, stream, store)?,
-        "LPOP" =>   handle_lpop(commands, stream, store)?,
-        "LPUSH" =>  handle_list_push(commands, stream, store, true)?,
-        "LRANGE" => handle_lrange(commands, stream, store)?,
+        "EXEC" => {
+            response = resp::build::resp_error(ErrorType::ERR, "EXEC without MULTI");
+            stream.write_all(&response)?;
+        }
+        "GET" =>    handle_get(arguments, stream, store)?,
+        "INCR" =>   handle_incr(arguments, stream, store)?,
+        "LLEN" =>   handle_llen(arguments, stream, store)?,
+        "LPOP" =>   handle_lpop(arguments, stream, store)?,
+        "LPUSH" =>  handle_list_push(arguments, stream, store, true)?,
+        "LRANGE" => handle_lrange(arguments, stream, store)?,
+        "MULTI" =>  handle_multi_exec(stream, store)?,
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;
         },
-        "RPUSH" =>  handle_list_push(commands, stream, store, false)?,
-        "SET" =>    handle_set(commands, stream, store)?,
-        "TYPE" =>   handle_type(commands, stream, store)?,
-        "XADD" =>   handle_xadd(commands, stream, store)?,
-        "XRANGE" => handle_xrange(commands, stream, store)?,
-        "XREAD" =>  handle_xread(commands, stream, store)?,
+        "RPUSH" =>  handle_list_push(arguments, stream, store, false)?,
+        "SET" =>    handle_set(arguments, stream, store)?,
+        "TYPE" =>   handle_type(arguments, stream, store)?,
+        "XADD" =>   handle_xadd(arguments, stream, store)?,
+        "XRANGE" => handle_xrange(arguments, stream, store)?,
+        "XREAD" =>  handle_xread(arguments, stream, store)?,
         _ => {
             return Ok(());
         }
