@@ -1,24 +1,27 @@
 use crate::resp;
+use crate::resp::build::ErrorType;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use crate::resp::build::ErrorType;
 
 /* Structs */
 
+#[derive(Debug)]
 enum Value {
     STRING(String),
     LIST(Vec<String>),
     STREAM(Stream),
 }
 
+#[derive(Debug)]
 enum Time {
     VAR,
     FIX(Duration, Instant),
 }
 
+#[derive(Debug)]
 pub struct ValueEntry {
     value: Value,
     time: Time
@@ -269,6 +272,40 @@ fn generate_stream_id(
     pair_str.push_str(&num_pair.1.to_string());
 
     (num_pair, resp::build::resp_bulk_str(&pair_str))
+}
+
+fn in_range_entries(
+    stream_pairs: &Vec<(String, StreamID)>,
+    store: &Arc<Mutex<DataTable>>
+) -> Vec<(String, Stream)> {
+    let mut stream_array = Vec::new();
+    let guard = store.lock().unwrap();
+    for pair in stream_pairs {
+        if let Some(entry) = guard.get(&pair.0) {
+            if let Value::STREAM(stream) = &entry.value {
+                let max = match stream.last() {
+                    Some(max) => max.0,
+                    None => (0, 0)
+                };
+
+                // Exclusive, so minimum is 1 sequence higher than
+                // the ID provided.
+                let min = if pair.1.0 == -1 {
+                    (max.0, max.1 + 1)
+                } else { // Assuming no -1 in pair.
+                    (pair.1.0, pair.1.1 + 1)
+                };
+                let valid_entries: Stream = stream.iter().cloned()
+                    .filter(
+                        // No actual maximum.
+                        |x| id_in_range(&x.0, &min, &(i64::MAX, i64::MAX))
+                    ).collect();
+                stream_array.push((pair.0.clone(), valid_entries));
+            }
+        }
+    }
+
+    stream_array
 }
 
 /* Main handlers */
@@ -549,6 +586,7 @@ fn handle_xadd(
     let mut id_pair = parse_stream_id(id);
     match guard.get_mut(&key) {
         Some(entry) => {
+            dbg!(&entry);
             if let Value::STREAM(stream) = &mut entry.value {
                 let previous = &stream.last().unwrap().0;
                 (id_pair, response) = generate_stream_id(&id_pair, previous);
@@ -619,49 +657,25 @@ fn handle_xread(
         ));
     }
 
-    let mut stream_array = Vec::new();
-    let guard = store.lock().unwrap();
-    for pair in stream_pairs {
-        if let Some(entry) = guard.get(&pair.0) {
-            if let Value::STREAM(stream) = &entry.value {
-                let max = match stream.last() {
-                    Some(max) => max.0,
-                    None => (0, 0)
-                };
-
-                // Exclusive, so minimum is 1 sequence higher than
-                // the ID provided.
-                let min = if pair.1.0 == -1 {
-                    (max.0, max.1 + 1)
-                } else { // Assuming no -1 in pair.
-                    (pair.1.0, pair.1.1 + 1)
-                };
-                let valid_entries: Stream = stream.iter().cloned()
-                    .filter(
-                        // No actual maximum.
-                        |x| id_in_range(&x.0, &min, &(i64::MAX, i64::MAX))
-                    ).collect();
-                stream_array.push((pair.0, valid_entries));
-            }
-        }
-    }
+    let stream_array = in_range_entries(&stream_pairs, &store);
+    let mut blocked_read_fail: bool = false;
 
     if block {
-        if !block_exists(&targets) {
-            let timeout = parse_timeout(&arguments[2], false);
-            if !init_block(&targets, timeout) {
-                targets.iter().for_each(|&target| remove_block(target));
-                stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
-                return Ok(());
-            }
-        } else {
+        if block_exists(&targets) {
             return Ok(());
         }
+
+        let timeout = parse_timeout(&arguments[2], false);
+        blocked_read_fail = !init_block(&targets, timeout);
     }
 
     targets.iter().for_each(|&target| remove_block(target));
-    let response = resp::build::resp_stream_multi_array(&stream_array);
-    stream.write_all(&response)?;
+    if blocked_read_fail {
+        stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
+    } else {
+        let response = resp::build::resp_stream_multi_array(&stream_array);
+        stream.write_all(&response)?;
+    }
     Ok(())
 }
 
