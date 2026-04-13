@@ -41,11 +41,7 @@ static BLOCK_SET: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 
 // Global block list.
 
-fn init_block(
-    arguments: &Vec<String>,
-    targets: &[&str],
-    timeout: Duration
-) {
+fn init_block(targets: &[&str], timeout: Duration) -> bool {
     let block = get_block_set();
     let mut table = block.lock().unwrap();
     let cond = Arc::new((Mutex::new(false), Condvar::new()));
@@ -71,12 +67,13 @@ fn init_block(
                 .unwrap();
             started = s;
             if time_result.timed_out() {
-                break;
+                return false;
             }
         }
     }
 
     // Blocks should be removed by the caller.
+    true
 }
 
 fn get_block_set() -> Arc<Mutex<BlockTable>> {
@@ -286,12 +283,12 @@ fn handle_blpop(
 
     let mut response = Vec::from(NULL_BULK_ARRAY);
     let timeout = parse_timeout(&arguments[2], true);
-    init_block(arguments, &[name], timeout);
-
-    if let Some(entry) = store.lock().unwrap().get_mut(name) {
-        if let Value::LIST(list) = &mut entry.value {
-            let entries = [&name[..], &list.remove(0)];
-            response = resp::build::resp_array(&entries);
+    if init_block(&[name], timeout) {
+        if let Some(entry) = store.lock().unwrap().get_mut(name) {
+            if let Value::LIST(list) = &mut entry.value {
+                let entries = [&name[..], &list.remove(0)];
+                response = resp::build::resp_array(&entries);
+            }
         }
     }
 
@@ -614,7 +611,11 @@ fn handle_xread(
 
     if block && !block_exists(&targets) {
         let timeout = parse_timeout(&arguments[2], false);
-        init_block(arguments, &targets, timeout);
+        if !init_block(&targets, timeout) {
+            targets.iter().for_each(|&target| remove_block(target));
+            stream.write_all(&Vec::from(NULL_BULK_ARRAY))?;
+            return Ok(());
+        }
     }
 
     let mut stream_pairs: Vec<(String, StreamID)> = Vec::new();
@@ -647,11 +648,7 @@ fn handle_xread(
     }
 
     targets.iter().for_each(|&target| remove_block(target));
-    let response = if stream_array.len() == 0 {
-        Vec::from(NULL_BULK_ARRAY)
-    } else {
-        resp::build::resp_stream_multi_array(&stream_array)
-    };
+    let response = resp::build::resp_stream_multi_array(&stream_array);
     stream.write_all(&response)?;
     Ok(())
 }
