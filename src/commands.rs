@@ -36,21 +36,22 @@ pub type StreamID = (i64, i64);
 pub type Stream = Vec<(StreamID, Vec<String>)>;
 pub type DataTable = HashMap<String, ValueEntry>;
 type BlockTable = HashMap<String, Arc<(Mutex<bool>, Condvar)>>;
-type WatchTable = HashMap<ThreadId, Vec<String>>;
+type ThreadWatchTable = HashMap<ThreadId, Vec<String>>;
+type SharedWatchTable = HashMap<String, bool>;
 
 /* Globals */
 
 const NULL_BULK_STR: &[u8] = b"$-1\r\n";
 const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
 static BLOCK_TABLE: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
-static WATCH_TABLE: OnceLock<Arc<Mutex<WatchTable>>> = OnceLock::new();
-
+static THREAD_WATCH_TABLE: OnceLock<Arc<Mutex<ThreadWatchTable>>> = OnceLock::new();
+static SHARED_WATCH_TABLE: OnceLock<Arc<Mutex<SharedWatchTable>>> = OnceLock::new();
 /* General helpers */
 
 // Global block list.
 
 fn init_block(targets: &[&str], timeout: Duration) -> bool {
-    let block = get_block_set();
+    let block = get_block_table();
     let mut table = block.lock().unwrap();
     let cond = Arc::new((Mutex::new(false), Condvar::new()));
 
@@ -84,16 +85,16 @@ fn init_block(targets: &[&str], timeout: Duration) -> bool {
     true
 }
 
-fn get_block_set() -> Arc<Mutex<BlockTable>> {
-    let set = BLOCK_TABLE.get_or_init(|| {
+fn get_block_table() -> Arc<Mutex<BlockTable>> {
+    let table = BLOCK_TABLE.get_or_init(|| {
         Arc::new(Mutex::new(BlockTable::new()))
     });
 
-    Arc::clone(set)
+    Arc::clone(table)
 }
 
 fn block_exists(targets: &[&str]) -> bool {
-    let block = get_block_set();
+    let block = get_block_table();
     let table = block.lock().unwrap();
     for &target in targets {
         if table.get(target).is_some() {
@@ -107,7 +108,7 @@ fn block_exists(targets: &[&str]) -> bool {
 // Notifies the idle thread that the blocking condition
 // has been met to wake it up.
 fn release_block(target: &str) {
-    let block = get_block_set();
+    let block = get_block_table();
     let mut guard = block.lock().unwrap();
     match guard.get_mut(target) {
         Some(var) => {
@@ -124,7 +125,7 @@ fn release_block(target: &str) {
 
 // Removes the target block from the block list.
 fn remove_block(target: &str) {
-    let block = get_block_set();
+    let block = get_block_table();
     let mut table = block.lock().unwrap();
     (&mut table).remove(target);
 }
@@ -141,14 +142,50 @@ fn parse_timeout(string: &str, secs: bool) -> Duration {
     }
 }
 
-// Global watch table.
+// Watches.
 
-fn get_watch_set() -> Arc<Mutex<WatchTable>> {
-    let set = WATCH_TABLE.get_or_init(|| {
-        Arc::new(Mutex::new(WatchTable::new()))
+fn get_thread_watch_table() -> Arc<Mutex<ThreadWatchTable>> {
+    let table = THREAD_WATCH_TABLE.get_or_init(|| {
+        Arc::new(Mutex::new(ThreadWatchTable::new()))
     });
 
-    Arc::clone(&set)
+    Arc::clone(table)
+}
+
+fn get_shared_watch_table() -> Arc<Mutex<SharedWatchTable>> {
+    let table = SHARED_WATCH_TABLE.get_or_init(|| {
+        Arc::new(Mutex::new(SharedWatchTable::new()))
+    });
+
+    Arc::clone(table)
+}
+
+fn set_modified_watch(target: &str) {
+    let shared_table = get_shared_watch_table();
+    shared_table.lock().unwrap().insert(String::from(target), true);
+}
+
+fn check_modified_watches() -> bool {
+    let thread_id = thread::current().id();
+
+    let thread_watch = get_thread_watch_table();
+    let thread_guard = thread_watch.lock().unwrap();
+    let watches = thread_guard.get(&thread_id).unwrap();
+
+    let shared_watch = get_shared_watch_table();
+    let shared_guard = shared_watch.lock().unwrap();
+    for watch in watches {
+        match shared_guard.get(watch) {
+            Some(state ) => {
+                if *state {
+                    return true;
+                }
+            },
+            None => {}
+        }
+    }
+
+    false
 }
 
 /* LPUSH/RPUSH */
@@ -351,6 +388,7 @@ fn handle_blpop(
         if let Some(entry) = store.lock().unwrap().get_mut(name) {
             if let Value::LIST(list) = &mut entry.value {
                 let entries = [&name[..], &list.remove(0)];
+                set_modified_watch(name);
                 response = resp::build::resp_array(&entries);
             }
         }
@@ -406,6 +444,7 @@ fn handle_incr(
             if let Value::STRING(string) = &mut entry.value {
                 if let Ok(num) = string.parse::<i64>() {
                     *string = String::from((num + 1).to_string());
+                    set_modified_watch(&arguments[1]);
                     response = resp::build::resp_integer(num + 1);
                 } else {
                     response = resp::build::resp_error(ErrorType::ERR,
@@ -418,6 +457,7 @@ fn handle_incr(
                 value: Value::STRING(String::from("1")),
                 time: Time::VAR
             });
+            set_modified_watch(&arguments[1]);
             response = resp::build::resp_integer(1);
         }
     }
@@ -500,6 +540,7 @@ fn handle_list_push(
     }
 
     release_block(&arguments[1]);
+    set_modified_watch(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
@@ -545,6 +586,7 @@ fn handle_lpop(
                     response = Vec::from(NULL_BULK_STR);
                 } else if count == 1 {
                     let popped = list.remove(0);
+                    set_modified_watch(&arguments[1]);
                     response = resp::build::resp_bulk_str(&popped);
                 } else {
                     if count > list.len() {
@@ -556,6 +598,7 @@ fn handle_lpop(
                     ).collect();
                     response = resp::build::resp_array(&popped);
                     *list = Vec::from(&list[count..]);
+                    set_modified_watch(&arguments[1]);
                 }
             }
         },
@@ -595,6 +638,12 @@ fn handle_multi_exec(
         response = resp::build::resp_simple_str("QUEUED");
         stream.write_all(&response)?;
         transaction.push(commands);
+    }
+
+    if check_modified_watches() {
+        response = Vec::from(NULL_BULK_ARRAY);
+        stream.write_all(&response)?;
+        return Ok(());
     }
 
     if transaction.len() == 0 {
@@ -646,6 +695,7 @@ fn handle_set(
         });
     }
 
+    set_modified_watch(&arguments[1]);
     response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
     Ok(())
@@ -678,11 +728,17 @@ fn handle_watch(
     arguments: &Vec<String>,
     stream: &mut TcpStream
 ) -> io::Result<()> {
-    let watch = get_watch_set();
-    watch.lock().unwrap().insert(
+    let thread_watch = get_thread_watch_table();
+    thread_watch.lock().unwrap().insert(
         thread::current().id(),
         Vec::from(&arguments[1..])
     );
+
+    let shared_watch = get_shared_watch_table();
+    let mut guard = shared_watch.lock().unwrap();
+    for watch in &arguments[1..] {
+        guard.insert(watch.clone(), false);
+    }
 
     let response = resp::build::resp_simple_str("OK");
     stream.write_all(&response)?;
@@ -725,6 +781,7 @@ fn handle_xadd(
     }
 
     release_block(&arguments[1]);
+    set_modified_watch(&arguments[1]);
     stream.write_all(&response)?;
     Ok(())
 }
