@@ -46,6 +46,7 @@ const NULL_BULK_ARRAY: &[u8] = b"*-1\r\n";
 static BLOCK_TABLE: OnceLock<Arc<Mutex<BlockTable>>> = OnceLock::new();
 static THREAD_WATCH_TABLE: OnceLock<Arc<Mutex<ThreadWatchTable>>> = OnceLock::new();
 static SHARED_WATCH_TABLE: OnceLock<Arc<Mutex<SharedWatchTable>>> = OnceLock::new();
+
 /* General helpers */
 
 // Global block list.
