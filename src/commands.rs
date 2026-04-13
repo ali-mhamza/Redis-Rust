@@ -379,6 +379,38 @@ fn handle_get(
     Ok(())
 }
 
+fn handle_incr(
+    arguments: &Vec<String>,
+    stream: &mut TcpStream,
+    store: &Arc<Mutex<DataTable>>
+) -> io::Result<()> {
+    let mut response = Vec::new();
+    let mut guard = store.lock().unwrap();
+    match (&mut guard).get_mut(&arguments[1]) {
+        Some(entry) => {
+            if let Value::STRING(string) = &mut entry.value {
+                if let Ok(num) = string.parse::<i64>() {
+                    *string = String::from((num + 1).to_string());
+                    response = resp::build::resp_integer(num + 1);
+                } else {
+                    response = resp::build::resp_error(ErrorType::ERR,
+                        "value is not an integer or out of range");
+                }
+            }
+        },
+        None => {
+            guard.insert(arguments[1].clone(), ValueEntry {
+                value: Value::STRING(String::from("1")),
+                time: Time::VAR
+            });
+            response = resp::build::resp_integer(1);
+        }
+    }
+
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 fn handle_lrange(
     arguments: &Vec<String>,
     stream: &mut TcpStream,
@@ -706,6 +738,7 @@ pub fn handle_commands(
             stream.write_all(&response)?;
         },
         "GET" =>    handle_get(commands, stream, store)?,
+        "INCR" =>   handle_incr(commands, stream, store)?,
         "LLEN" =>   handle_llen(commands, stream, store)?,
         "LPOP" =>   handle_lpop(commands, stream, store)?,
         "LPUSH" =>  handle_list_push(commands, stream, store, true)?,
