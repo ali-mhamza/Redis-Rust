@@ -596,16 +596,14 @@ fn handle_xread(
     stream: &mut TcpStream,
     store: &Arc<Mutex<DataTable>>
 ) -> io::Result<()> {
-    dbg!(&arguments);
     let block = (&arguments[1]).to_uppercase() == "BLOCK";
-    let skip_args = if block { 2 } else { 4 };
+    let skip_args = if block { 4 } else { 2 };
     let stream_count = (arguments.len() - skip_args) / 2;
     let targets: Vec<&str> = (&arguments[skip_args..skip_args + stream_count])
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    dbg!(&targets);
     if block && !block_exists(&targets) {
         init_block(arguments, &targets, 2);
     }
