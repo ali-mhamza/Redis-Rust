@@ -640,6 +640,7 @@ fn handle_xread(
                 } else { // Assuming no -1 in pair.
                     (pair.1.0, pair.1.1 + 1)
                 };
+                dbg!(min);
                 let valid_entries: Stream = stream
                     .iter()
                     .cloned()
