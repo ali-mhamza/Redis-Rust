@@ -569,8 +569,13 @@ fn handle_multi_exec(
         transaction.push(commands);
     }
 
-    for command in transaction {
-        handle_command(&command, stream, &store)?;
+    if transaction.len() == 0 {
+        let response = resp::build::resp_array(&[]);
+        stream.write_all(&response)?;
+    } else {
+        for command in transaction {
+            handle_command(&command, stream, &store)?;
+        }
     }
 
     Ok(())
