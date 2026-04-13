@@ -170,7 +170,12 @@ fn check_modified_watches() -> bool {
 
     let thread_watch = get_thread_watch_table();
     let thread_guard = thread_watch.lock().unwrap();
-    let watches = thread_guard.get(&thread_id).unwrap();
+    let watches = match thread_guard.get(&thread_id) {
+        Some(list) => list,
+        None => {
+            return false;
+        }
+    };
 
     let shared_watch = get_shared_watch_table();
     let shared_guard = shared_watch.lock().unwrap();
