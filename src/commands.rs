@@ -604,6 +604,7 @@ fn handle_xread(
         .map(|s| s.as_str())
         .collect();
 
+    dbg!(&targets);
     if block && !block_exists(&targets) {
         init_block(arguments, &targets, 2);
     }
