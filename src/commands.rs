@@ -729,6 +729,18 @@ fn handle_type(
     Ok(())
 }
 
+fn handle_unwatch(stream: &mut TcpStream) -> io::Result<()> {
+    let thread_id = thread::current().id();
+    let thread_watch = get_thread_watch_table();
+    // Does nothing if there were no watches on the connection
+    // in the first place.
+    thread_watch.lock().unwrap().remove(&thread_id);
+
+    let response = resp::build::resp_simple_str("OK");
+    stream.write_all(&response)?;
+    Ok(())
+}
+
 fn handle_watch(
     arguments: &Vec<String>,
     stream: &mut TcpStream
@@ -870,7 +882,7 @@ pub fn handle_command(
     let response: Vec<u8>;
 
     match &cmd[..] {
-        "BLPOP" =>  handle_blpop(arguments, stream, store)?,
+        "BLPOP" =>      handle_blpop(arguments, stream, store)?,
         "DISCARD" => {
             response = resp::build::resp_error(
                 ErrorType::ERR, "DISCARD without MULTI");
@@ -885,24 +897,25 @@ pub fn handle_command(
                 ErrorType::ERR, "EXEC without MULTI");
             stream.write_all(&response)?;
         }
-        "GET" =>    handle_get(arguments, stream, store)?,
-        "INCR" =>   handle_incr(arguments, stream, store)?,
-        "LLEN" =>   handle_llen(arguments, stream, store)?,
-        "LPOP" =>   handle_lpop(arguments, stream, store)?,
-        "LPUSH" =>  handle_list_push(arguments, stream, store, true)?,
-        "LRANGE" => handle_lrange(arguments, stream, store)?,
-        "MULTI" =>  handle_multi_exec(stream, store)?,
+        "GET" =>        handle_get(arguments, stream, store)?,
+        "INCR" =>       handle_incr(arguments, stream, store)?,
+        "LLEN" =>       handle_llen(arguments, stream, store)?,
+        "LPOP" =>       handle_lpop(arguments, stream, store)?,
+        "LPUSH" =>      handle_list_push(arguments, stream, store, true)?,
+        "LRANGE" =>     handle_lrange(arguments, stream, store)?,
+        "MULTI" =>      handle_multi_exec(stream, store)?,
         "PING" => {
             response = resp::build::resp_simple_str("PONG");
             stream.write_all(&response)?;
         },
-        "RPUSH" =>  handle_list_push(arguments, stream, store, false)?,
-        "SET" =>    handle_set(arguments, stream, store)?,
-        "TYPE" =>   handle_type(arguments, stream, store)?,
-        "WATCH" =>  handle_watch(arguments, stream)?,
-        "XADD" =>   handle_xadd(arguments, stream, store)?,
-        "XRANGE" => handle_xrange(arguments, stream, store)?,
-        "XREAD" =>  handle_xread(arguments, stream, store)?,
+        "RPUSH" =>      handle_list_push(arguments, stream, store, false)?,
+        "SET" =>        handle_set(arguments, stream, store)?,
+        "TYPE" =>       handle_type(arguments, stream, store)?,
+        "UNWATCH" =>    handle_unwatch(stream)?,
+        "WATCH" =>      handle_watch(arguments, stream)?,
+        "XADD" =>       handle_xadd(arguments, stream, store)?,
+        "XRANGE" =>     handle_xrange(arguments, stream, store)?,
+        "XREAD" =>      handle_xread(arguments, stream, store)?,
         _ => {
             return Ok(());
         }
