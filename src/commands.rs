@@ -586,7 +586,6 @@ fn handle_xadd(
     let mut id_pair = parse_stream_id(id);
     match guard.get_mut(&key) {
         Some(entry) => {
-            dbg!(&entry);
             if let Value::STREAM(stream) = &mut entry.value {
                 let previous = &stream.last().unwrap().0;
                 (id_pair, response) = generate_stream_id(&id_pair, previous);
@@ -658,6 +657,7 @@ fn handle_xread(
     }
 
     let stream_array = in_range_entries(&stream_pairs, &store);
+    dbg!(&stream_array);
     let mut blocked_read_fail: bool = false;
 
     if block {
