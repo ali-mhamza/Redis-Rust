@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod connect;
+pub mod replication;
 pub mod resp;
 pub mod utils;
 
